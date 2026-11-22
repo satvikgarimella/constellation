@@ -58,6 +58,8 @@ The launcher uses `CLOUDFLARED_BIN` when set, otherwise a local `.tools/cloudfla
 
 Use separate physical devices for a meaningful crowd benchmark. Several browser contexts on one computer test coordination but share hardware. Timings include networking and browser overhead; scene geometry, device speed, and temperature also affect results. More devices do not guarantee a speedup. The displayed throughput is completed pixel-samples per second, not a count of every secondary ray traced.
 
+The app supports more than two participants. A room accepts **100 connected browser sessions total**, including the host and spectators: one host leaves room for up to 99 phone sessions. Each open tab counts separately. This is a connection limit, not a guarantee that 99 phones will render efficiently. The coordinator broadcasts every completed tile to all connected viewers, so network traffic grows with the audience. Start with two physical phones, then increase the group and measure the same workload. Use **Live demo** for larger groups; **Quick check** has only 64 tiles and initially supplies at most 16 workers with four-tile batches.
+
 For an operator-controlled rehearsal, run `node scripts/phone-test.mjs https://YOUR-DEMO-ORIGIN`. It prints a fresh join link, waits for two opt-in participants, renders a quick shared image, then runs three matching solo/crowd pairs. Keep both pages open. It writes `artifacts/phone-test-report.json`; paused/disconnected devices, mixed renderers, and incomplete tests are reported rather than counted as passes. The operator must confirm that the participants really are on separate physical phones. The controller itself does no rendering.
 
 ## GPU and phone access
@@ -148,6 +150,8 @@ node --test test/*.test.js
 ```
 
 The automated suite covers deterministic tile assembly, the Orbit scene and material bounds, binary framing, bounded batch scheduling and reassignments, selected-worker scheduling, compatible benchmark eligibility, disconnects/timeouts, owner authorization, stale/duplicate results, cancelled runs, late-viewer replay, real HTTP/WebSocket rendering, JSONL events, database recovery, and Gemini response handling. Service adapter unit tests use simulated responses; the live-service verifier is a separate check.
+
+For a larger coordination check, run `node test/load.mjs`. It starts an isolated loopback server, connects 32 simulated workers and a host, checks complete tile delivery, drops eight workers with unfinished batches, and checks the 100-session cap. Workers submit synthetic pixel payloads; this checks scheduling, fan-out, and recovery, not rendering correctness or phone/GPU speed. It does not use cloud credentials or the running public demo.
 
 Optional browser tests require Playwright and Chromium:
 

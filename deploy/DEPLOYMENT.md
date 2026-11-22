@@ -14,19 +14,21 @@ These are engineering starting points, not load-tested capacity claims. Start wi
 
 - An approved existing Vultr instance, or approval to create the exact plan above within a stated budget.
 - Server address, SSH username and an authorized local SSH key. Do not paste private keys into chat or commit them.
-- A public hostname you control, such as `render.example.com`, with DNS access.
+- The server's stable public IPv4, or a hostname you control with DNS access. A domain purchase is optional.
 - An approved source commit from this repository to deploy.
 - Server-only Gemini and Tiger Data values in `.env` if those integrations are part of the demonstration. Rendering works without them; that does not demonstrate sponsor integration.
 
 Use a supported Ubuntu image with Docker Engine and the Compose plugin. Vultr offers a [Docker Marketplace image](https://docs.vultr.com/how-to-use-vultrs-docker-marketplace-application). On an existing Ubuntu host without Docker, follow the [official Docker installation guide](https://docs.docker.com/engine/install/ubuntu/); verify both `docker version` and `docker compose version` before continuing. This guide does not install packages on the current computer.
 
-## DNS and network
+## Public address, DNS, and network
 
-Point the hostname's A record at the server's public IPv4 address. Add an AAAA record only if IPv6 routing and firewall rules are also correct. The value of `DOMAIN` is a bare hostname, without `https://`, a path, or a trailing slash.
+For the simplest demo, set `DOMAIN` to the VM's actual public IPv4 address. Let’s Encrypt supports publicly trusted IP certificates through its `shortlived` profile; no domain registration is required. The supplied Caddy configuration explicitly selects this issuer/profile and sets `default_sni` to support IP connections behind Docker. Compose pins Caddy 2.11.9, with which this configuration has passed local syntax and provisioning validation. That validation did not request a certificate or verify a deployed server. [Let’s Encrypt IP certificate announcement](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability), [Caddy release](https://github.com/caddyserver/caddy/releases/tag/v2.11.9), [Caddy IP/SNI guidance](https://github.com/caddyserver/caddy/issues/7526).
+
+If you already have a hostname, point its A record at the server's public IPv4 and use that hostname for `DOMAIN` instead. Add an AAAA record only if IPv6 routing and firewall rules are also correct. In either case, omit `https://`, ports, paths, and trailing slashes from `DOMAIN`.
 
 Permit TCP 80 and TCP 443 in the Vultr firewall and host networking. Permit SSH only from the operator's trusted address where practical. UDP 443 is optional for HTTP/3 and is already published by Compose. Do not publish app port 3210 or a database port. Apply the [Vultr firewall group](https://docs.vultr.com/products/compute/instances/cloud-compute/networking/enable-firewall) to the chosen instance. Docker-published ports can bypass UFW rules, so use the provider firewall as well; see [Docker's firewall limitations](https://docs.docker.com/engine/install/ubuntu/#firewall-limitations).
 
-Caddy obtains and renews the certificate when DNS points to this host and its challenge ports are reachable. Its certificate state is persisted in the `caddy-data` volume. A bare IP or a self-signed certificate is not an equivalent phone-friendly setup for the supplied Caddy configuration. [Caddy automatic HTTPS prerequisites](https://caddyserver.com/docs/automatic-https).
+Caddy obtains and renews the public certificate when the configured address reaches this host and its challenge ports are reachable. Short-lived certificates last about 160 hours, so leave automatic renewal running and preserve the `caddy-data` volume. An IP address change also changes the demo URL and requires a certificate for the new address. Verify successful public issuance before inviting phones; a self-signed certificate does not provide the same browser trust. [Caddy automatic HTTPS prerequisites](https://caddyserver.com/docs/automatic-https), [Let’s Encrypt challenge requirements](https://letsencrypt.org/docs/challenge-types/).
 
 ## Deploy the reviewed source
 
@@ -40,7 +42,7 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Edit `.env` with the server's editor. Set `DOMAIN=render.example.com` to the real hostname. Enter `GEMINI_API_KEY`, the selected `GEMINI_MODEL`, and `DATABASE_URL` locally if needed. Preserve required TLS options in the database connection string. Never place these values in `public/`, terminal screenshots, shell command arguments, or Git. Compose sets `PUBLIC_URL=https://${DOMAIN}`, binds the coordinator internally, and uses a persistent volume for telemetry.
+Edit `.env` with the server's editor. Set `DOMAIN` to the real server's public IPv4, or your hostname. Enter `GEMINI_API_KEY`, the selected `GEMINI_MODEL`, and `DATABASE_URL` locally if needed. Preserve required TLS options in the database connection string. Never place these values in `public/`, terminal screenshots, shell command arguments, or Git. Compose sets `PUBLIC_URL=https://${DOMAIN}`, binds the coordinator internally, and uses a persistent volume for telemetry.
 
 From the repository root, validate without printing the interpolated configuration, then build and start:
 
@@ -58,7 +60,7 @@ docker compose --env-file .env -f deploy/compose.yaml logs --tail 80 app caddy
 
 ## Verify from another computer
 
-Run the probe from the matching local checkout with dependencies installed and Node 22.9 or newer. Replace the example hostname with the deployed origin:
+Run the probe from the matching local checkout with dependencies installed and Node 22.9 or newer. Replace the example hostname with the deployed IP address or hostname:
 
 ```sh
 BASE_URL=https://render.example.com MATCH_LOCAL_ASSETS=1 node scripts/verify-deployment.mjs

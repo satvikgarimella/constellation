@@ -13,7 +13,7 @@ services:
       - render-data:/app/data
     restart: unless-stopped
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11.9-alpine
     environment:
       DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
     ports:

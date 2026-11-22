@@ -110,8 +110,8 @@ No hosted database is connected in this checkout. Recovery behavior is tested wi
 
 The full [Vultr deployment guide](deploy/DEPLOYMENT.md) includes sizing, source pinning, verification, updates, and rollback. Verify a deployed origin with `BASE_URL=https://YOUR-DOMAIN MATCH_LOCAL_ASSETS=1 node scripts/verify-deployment.mjs`. Its HTTPS/WebSocket checks do not substitute for rendering on the actual phones or calling the sponsor services.
 
-1. Point a domain's DNS record at the VM. Allow inbound TCP 80 and 443 (UDP 443 optional).
-2. Copy this project to the VM. Create `.env` from `.env.example`; add `DOMAIN=render.your-domain.com` and optional service credentials.
+1. Use the VM's stable public IPv4, or point a hostname's DNS record at the VM. Allow inbound TCP 80 and 443 (UDP 443 optional). A domain purchase is optional; the supplied Caddy configuration requests publicly trusted short-lived IP certificates.
+2. Copy this project to the VM. Create `.env` from `.env.example`; set `DOMAIN` to the actual public IPv4 or hostname, without `https://`, and add optional service credentials.
 3. From the project root, run:
 
 ```sh

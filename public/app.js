@@ -21,8 +21,9 @@ const seconds=n=>n<60?`${n.toFixed(1)}s`:`${Math.floor(n/60)}m ${Math.floor(n%60
 const format=n=>new Intl.NumberFormat('en',{maximumFractionDigits:1}).format(n);
 
 function studioMarkup() {
-  return `<header class="topbar"><a class="brand" href="/">${logo}<span>constellation<span class="brand-dot">.</span></span></a><div class="topbar-right"><span id="connection" class="connection"><i></i>Connecting</span><button class="button primary compact presentation-control" id="present-render" disabled>Render</button><button class="button secondary compact" id="present-button">Present</button><button class="button secondary compact" id="share-button">Invite devices ${arrow}</button></div></header>
+  return `<header class="topbar"><a class="brand" href="/">${logo}<span>constellation<span class="brand-dot">.</span></span></a><div class="topbar-right"><span id="studio-role" class="tag studio-role" aria-live="polite">Connecting</span><span id="connection" class="connection"><i></i>Connecting</span><button class="button primary compact presentation-control" id="present-render" disabled>Render</button><button class="button secondary compact" id="present-button">Present</button><button class="button secondary compact" id="share-button">Invite devices ${arrow}</button></div></header>
   <main class="studio"><section class="intro"><div><div class="eyebrow"><span class="tiny-star">✳</span> A BROWSER-POWERED RENDER STUDIO</div><h1>Every device. <span>Part of the picture.</span></h1></div><div class="room-tag">YOUR CONSTELLATION <strong id="room-code"></strong></div></section>
+  <section id="viewer-banner" class="viewer-banner hidden" role="status"><div><strong>You’re viewing this studio.</strong><p>Open the original host tab to choose scenes and start renders. You can still contribute from this tab.</p><p class="hint">Creating your own studio makes a new room. Invite your devices again.</p></div><a class="button primary" href="/">Create my own studio ${arrow}</a></section>
   <section class="demo-strip"><div><span class="demo-step">01</span><strong>Invite the room</strong><span>Scan the QR</span></div><div><span class="demo-step">02</span><strong>Contribute compute</strong><span>Keep phones open</span></div><div><span class="demo-step">03</span><strong>Render together</strong><span>Watch every tile arrive</span></div><span id="network-status" class="network-status">Checking connection…</span></section>
   <section class="stats" aria-label="Live render statistics"><div><span class="stat-label">Contributing devices</span><strong id="stat-devices">0 <small>online</small></strong></div><div><span class="stat-label">Tiles rendered</span><strong id="stat-tiles">0 <small>/ —</small></strong></div><div><span class="stat-label" title="Completed pixels multiplied by samples, divided by elapsed seconds">Render throughput</span><strong id="stat-rate">— <small>M samples / sec</small></strong></div><div><span class="stat-label">Elapsed time</span><strong id="stat-time">—</strong></div><div><span class="stat-label">Recovered tiles</span><strong id="stat-retries">0</strong></div></section>
   <section class="workbench"><aside class="scene-panel panel"><div class="panel-heading"><span class="section-number">01</span><h2>The scene</h2></div><p class="muted small">Choose a world to render together.</p><div class="presets">${Object.entries(PRESETS).map(([id,s])=>`<button class="preset ${id===selectedPreset?'selected':''}" data-preset="${id}"><span class="preset-art ${id}"><i></i><i></i><i></i></span><span><strong>${s.name}</strong><small>${{aurora:'Dunes & northern lights',city:'Towers & neon reflections',orbit:'Chrome & luminous',solstice:'Warm & reflective',lunar:'Cool & cinematic',orchard:'Soft & sunlit'}[id]}</small></span><span class="selection-dot"></span></button>`).join('')}</div>
@@ -109,7 +110,16 @@ function connect() {
   };
   ws.onerror=()=>{};
 }
-function connectionUI() {const el=$('#connection');if(!el)return;el.innerHTML=`<i></i>${connected?'Live connection':'Reconnecting…'}`;el.classList.toggle('online',connected);}
+function connectionUI() {
+  const el=$('#connection');if(!el)return;
+  el.innerHTML=`<i></i>${connected?'Live connection':'Reconnecting…'}`;el.classList.toggle('online',connected);
+  if(!joinView) {
+    $('#viewer-banner').classList.toggle('hidden',!connected||isHost);
+    $('#studio-role').textContent=connected?(isHost?'Host':'Viewer'):'Connecting';
+    $('#studio-role').classList.toggle('host',connected&&isHost);
+  }
+  if(connected)document.title=`${joinView?'Contribute':isHost?'Host':'Viewer'} · ${roomId} — Constellation`;
+}
 
 function renderNextJob(){
   if(currentJob||!contributing||!worker||!connected)return;

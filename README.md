@@ -46,6 +46,8 @@ Open the printed **Public studio** HTTPS link on the laptop to create the host r
 
 Keep the share terminal and laptop running. **Ctrl-C stops both the app and tunnel.** The URL is temporary, changes on the next launch, and has no uptime guarantee. Anyone with the URL can reach the app. [Quick Tunnel documentation](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
 
+The page and browser tab show **Host** or **Viewer** after connecting. If scene controls are disabled in a viewer tab, return to the original **Host** tab or choose **Create my own studio**. That action creates a separate room, so invite the phones again. A host can select scenes before devices join; starting a render also requires at least one device to click **Contribute compute**.
+
 The launcher uses `CLOUDFLARED_BIN` when set, otherwise a local `.tools/cloudflared` binary when present, otherwise `cloudflared` on `PATH`. `.tools/` is gitignored. It uses its own empty tunnel configuration and saves the current address in `data/demo-url.json`; an old file does not mean its tunnel is still running.
 
 ## First multi-device demo
@@ -185,6 +187,8 @@ GPU_ARGS='["--enable-unsafe-webgpu","--use-angle=metal"]' node test/demo.mjs
 `test/demo.mjs` drives the real UI with a separate host and three WebGPU worker contexts. It checks the automatic solo/crowd comparison, benchmark export, a disconnected worker's tile recovery, a finished image, and the presentation/mobile layouts. All three workers share the test computer's GPU. This verifies the workflow and shader execution, not performance across three physical phones.
 
 `test/controls.mjs` checks that losing the solo worker cancels the comparison, the presentation Stop button remains usable when all workers pause, and the HTTPS invite QR loads correctly.
+
+`node test/host-role.mjs` starts an isolated server and verifies host controls, viewer guidance, the explicit new-studio action, browser-tab roles, and mobile layouts. It leaves host credentials scoped to the creating tab.
 
 `node test/scenes.mjs` starts its own isolated server and renders Aurora Desert and Neon City through two actual WebGPU worker contexts. It checks both contributors, all 64 tiles, CPU/GPU pixel agreement, the new-scene status, and mobile layout. It saves rendered PNGs and `artifacts/landscapes-report.json`. Use the same `PLAYWRIGHT_MODULE` and `GPU_ARGS` settings as the other hardware tests. Set `GENERATED_SCENE` to a saved normalized Gemini scene JSON to test that scene as well; this replays the generation response and does not make an API request. Live API functionality must be checked separately.
 

@@ -67,6 +67,7 @@ test('plain Postgres stays supported and idle connection errors expose only safe
   assert.equal(telemetry.databaseReady,true);assert.equal(telemetry.hypertableReady,false);
   pool.emit('error',Object.assign(new Error('private server and password'),{code:'ECONNRESET'}));
   assert.equal(telemetry.databaseReady,false);assert.equal(telemetry.lastErrorCode,'ECONNRESET');
+  assert.equal(safeDatabaseErrorCode(Object.assign(new Error('private server and password'),{code:'SELF_SIGNED_CERT_IN_CHAIN'})),'SELF_SIGNED_CERT_IN_CHAIN');
   assert.equal(safeDatabaseErrorCode({code:'private server and password'}),'DATABASE_ERROR');
   assert.equal(safeDatabaseErrorCode(new Error('private server and password')),'DATABASE_ERROR');
 });

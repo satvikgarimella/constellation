@@ -2,7 +2,7 @@ import { mkdirSync, appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import pg from 'pg';
 
-const connectionErrorCodes=new Set(['ECONNREFUSED','ECONNRESET','ENOTFOUND','ETIMEDOUT','EPIPE','CERT_HAS_EXPIRED','UNABLE_TO_VERIFY_LEAF_SIGNATURE','DEPTH_ZERO_SELF_SIGNED_CERT']);
+const connectionErrorCodes=new Set(['ECONNREFUSED','ECONNRESET','ENOTFOUND','ETIMEDOUT','EPIPE','CERT_HAS_EXPIRED','UNABLE_TO_VERIFY_LEAF_SIGNATURE','DEPTH_ZERO_SELF_SIGNED_CERT','SELF_SIGNED_CERT_IN_CHAIN']);
 export function safeDatabaseErrorCode(error) {
   const code=error?.code;
   return typeof code==='string' && (/^[0-9A-Z]{5}$/.test(code)||connectionErrorCodes.has(code)) ? code : 'DATABASE_ERROR';

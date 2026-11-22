@@ -1,6 +1,6 @@
 # Connect Gemini, Tiger Data, and Vultr
 
-Rendering works without these accounts. This guide connects the optional services and explains how to verify them; it does not mean they are already configured or live. Provider information was checked on November 21, 2026.
+Rendering works without these accounts. This guide connects the optional services and explains how to verify them; it does not mean they are already configured or live. Provider information was checked on November 22, 2026.
 
 ## 1. Prepare your local settings
 
@@ -28,11 +28,15 @@ Open `.env` in your text editor. Keep this file local: it is excluded from Git. 
 
 New accounts start on the Free Tier, and this model has free input/output tokens within that tier's limits. Some projects require verification. You can see your actual quota in [AI Studio's rate-limit dashboard](https://aistudio.google.com/rate-limit). Enabling billing changes the cost arrangement; you can keep this demo on the Free Tier. [Key setup](https://aistudio.google.com/docs/api-key), [billing](https://aistudio.google.com/docs/billing), [model pricing](https://aistudio.google.com/docs/pricing#gemini-3.8-flash).
 
-## 3. Create a free Tiger Data database
+## 3. Connect Tiger Data with certificate verification
 
-1. Sign up in [Tiger Console](https://console.cloud.tigerdata.com/signup).
-2. Choose **New service**, then **Shared** compute, the documented free option. Keep TimescaleDB enabled, choose **Development**, and name the service `constellation`.
-3. Check that the configuration summary shows a free/shared service, then create it. Wait until it is **Ready**.
+The app verifies the database server's certificate. Tiger Data's free services do not provide the publicly trusted certificates needed for this setup. A free Shared service can therefore fail with `SELF_SIGNED_CERT_IN_CHAIN`. Keep verification enabled; do not fix this by disabling certificate checks. Rendering and local telemetry continue to work without the cloud database. [Tiger Data's certificate documentation](https://www.tigerdata.com/docs/deploy/tiger-cloud/tiger-cloud-aws/security/strict-ssl).
+
+For a service with a trusted certificate:
+
+1. Open [Tiger Console](https://console.cloud.tigerdata.com/) and check **Billing** for your trial balance, expiry, and payment arrangements. The separate standard-service trial offers $1,000 in credits for 30 days with no card required. Standard services consume credits and are not permanently free; credits expire and data may be removed afterward unless a payment method is added. [Trial and billing terms](https://www.tigerdata.com/docs/deploy/tiger-cloud/tiger-cloud-aws/pricing-and-account-management).
+2. Choose **New service**, then the smallest **Standard** configuration suitable for the demo. Keep TimescaleDB enabled, choose **Development**, and name the service `constellation`. Review the displayed compute and storage costs against your budget before creating it. Leave an existing free service intact.
+3. Wait until it is **Ready**. Standard services initially have a self-signed certificate; Tiger Data says a trusted certificate usually arrives within 30 minutes. Keep verification enabled while waiting.
 4. Choose **Download the config** and save it privately. It contains the database password, which is shown only at creation.
 5. Copy the complete PostgreSQL connection URL from that configuration into the `DATABASE_URL` line in `.env`:
 
@@ -40,9 +44,7 @@ New accounts start on the Free Tier, and this model has free input/output tokens
    DATABASE_URL="PASTE_THE_COMPLETE_POSTGRESQL_URL_HERE"
    ```
 
-Copy the URL itself, including its password and required TLS parameters; leave out any surrounding `psql` command. If you lose the password, reset it in the console. Connection details are under **Service info → Connect → More details**. [Create-service instructions](https://www.tigerdata.com/docs/get-started/quickstart/create-service), [connection details](https://www.tigerdata.com/docs/integrate/find-connection-details).
-
-Tiger Data currently includes up to two free services, in beta. Their resources are limited, and reaching the storage cap makes a service read-only. The separate standard-service trial offers $1,000 in credits for 30 days with no card required; its credits expire and data may be removed afterward unless a payment method is added. Select Shared for this small demo and review the limits displayed in your account. [Free services and trial terms](https://www.tigerdata.com/docs/deploy/tiger-cloud/tiger-cloud-aws/pricing-and-account-management).
+Copy the URL itself, including its password; leave out any surrounding `psql` command. Replace `sslmode=require` with `sslmode=verify-full` to explicitly require certificate and hostname verification. If you lose the password, reset it in the console. Connection details are under **Service info → Connect → More details**. [Create-service instructions](https://www.tigerdata.com/docs/get-started/quickstart/create-service), [connection details](https://www.tigerdata.com/docs/integrate/find-connection-details).
 
 ## 4. Verify the real services
 
@@ -63,7 +65,7 @@ node --env-file-if-exists=.env scripts/verify-services.mjs --gemini
 node --env-file-if-exists=.env scripts/verify-services.mjs --database
 ```
 
-`missing_configuration` means a required `.env` value is empty. For a Gemini failure, check the key, model access, and quota; HTTP 429 usually means a quota limit. For a database failure, check the complete URL, password, service readiness, and required TLS options.
+`missing_configuration` means a required `.env` value is empty. For a Gemini failure, check the key, model access, and quota; HTTP 429 usually means a quota limit. For a database failure, check the complete URL, password, service readiness, and required TLS options. `SELF_SIGNED_CERT_IN_CHAIN` means the certificate chain is not trusted: for a new standard Tiger service, wait for certificate issuance; for a free service, use a service with a trusted certificate or obtain a CA through a trusted provider channel. Do not trust a certificate solely because the failing endpoint supplied it.
 
 Restart the running app or share launcher after editing `.env`, then test prompt-to-scene and render telemetry in the UI. A passing service check does not verify phones or a public deployment; use the [multi-device demo steps](README.md#first-multi-device-demo) for that.
 

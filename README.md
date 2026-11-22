@@ -13,7 +13,9 @@ cd constellation-render
 node --env-file-if-exists=.env server/index.js
 ```
 
-Open **http://localhost:3210**. Click **Contribute compute**, choose **Quick check**, then **Start render**. The default **Orbit** scene contains 54 spheres: a chrome core, colored orbiting beads, emissive accents, and a reflective floor. Every visible result is calculated by the contributing browsers.
+Open **http://localhost:3210**. Click **Contribute compute**, choose **Quick check**, then **Start render**. New rooms start with **Aurora Desert**. The original **Orbit** scene is also available: a chrome core, 50 orbiting beads, emissive accents, and a reflective floor. Every visible result is calculated by the contributing browsers.
+
+Try **Aurora Desert** for rolling dune geometry under a procedural aurora and stars, or **Neon City** for solid towers, glowing facade bands, and reflected light. Terrain and boxes work in both the WebGPU and CPU renderers. The aurora is an analytic sky effect that appears in reflections; it is not a volumetric atmospheric simulation. Selecting a preset or generating a scene marks it **SCENE READY**. Press **Start render** to calculate its image.
 
 For a fresh checkout, install first:
 
@@ -92,7 +94,7 @@ For the database UI path, wait until `/api/config` reports `databaseReady: true`
 
 Set `GEMINI_API_KEY`. The host can describe a composition; Gemini returns structured JSON containing geometry, materials, camera, and lighting. The server bounds and validates it before sending it to the renderers. The model does not return executable JavaScript or WGSL.
 
-The default is `gemini-3.8-flash`, configurable with `GEMINI_MODEL`. This uses the `generateContent` endpoint with `responseJsonSchema`; see Google's [API reference](https://aistudio.google.com/api-reference/generate-content) and [model migration documentation](https://aistudio.google.com/docs/whats-new-gemini-3.8). The scene vocabulary is deliberately limited to spheres and a ground plane, so prompts are abstract compositions rather than arbitrary 3D models.
+The default is `gemini-3.8-flash`, configurable with `GEMINI_MODEL`. This uses the `generateContent` endpoint with `responseJsonSchema`; see Google's [API reference](https://aistudio.google.com/api-reference/generate-content) and [model migration documentation](https://aistudio.google.com/docs/whats-new-gemini-3.8). Gemini can compose spheres, solid boxes, dune terrain, aurora, and a starry sky, including the camera, materials, and lighting. Try “a desert with northern lights” or “a neon city skyline reflected in a dark plaza.” Generated geometry is limited to 24 spheres and 32 boxes. Detailed arbitrary meshes, text, and image textures are not implemented; other objects are approximated using the supported geometry and described as such.
 
 No key is bundled. The adapter has automated tests using simulated API responses; a live call still needs your key and available model/quota.
 
@@ -151,7 +153,7 @@ The host capability token stays in the creating tab's session storage and is not
 node --test test/*.test.js
 ```
 
-The automated suite covers deterministic tile assembly, the Orbit scene and material bounds, binary framing, bounded batch scheduling and reassignments, selected-worker scheduling, compatible benchmark eligibility, disconnects/timeouts, owner authorization, stale/duplicate results, cancelled runs, late-viewer replay, real HTTP/WebSocket rendering, JSONL events, database recovery, and Gemini response handling. Service adapter unit tests use simulated responses; the live-service verifier is a separate check.
+The automated suite covers deterministic tile assembly, sphere and box material bounds, box intersections, terrain hits and analytic normals, procedural sky effects, binary framing, bounded batch scheduling and reassignments, selected-worker scheduling, compatible benchmark eligibility, disconnects/timeouts, owner authorization, stale/duplicate results, cancelled runs, late-viewer replay, real HTTP/WebSocket rendering, JSONL events, database recovery, and Gemini response handling. Service adapter unit tests use simulated responses; the live-service verifier is a separate check.
 
 For a larger coordination check, run `node test/load.mjs`. It starts an isolated loopback server, connects 32 simulated workers and a host, checks complete tile delivery, drops eight workers with unfinished batches, and checks the 100-session cap. Workers submit synthetic pixel payloads; this checks scheduling, fan-out, and recovery, not rendering correctness or phone/GPU speed. It does not use cloud credentials or the running public demo.
 
@@ -184,13 +186,15 @@ GPU_ARGS='["--enable-unsafe-webgpu","--use-angle=metal"]' node test/demo.mjs
 
 `test/controls.mjs` checks that losing the solo worker cancels the comparison, the presentation Stop button remains usable when all workers pause, and the HTTPS invite QR loads correctly.
 
+`node test/scenes.mjs` starts its own isolated server and renders Aurora Desert and Neon City through two actual WebGPU worker contexts. It checks both contributors, all 64 tiles, CPU/GPU pixel agreement, the new-scene status, and mobile layout. It saves rendered PNGs and `artifacts/landscapes-report.json`. Use the same `PLAYWRIGHT_MODULE` and `GPU_ARGS` settings as the other hardware tests. Set `GENERATED_SCENE` to a saved normalized Gemini scene JSON to test that scene as well; this replays the generation response and does not make an API request. Live API functionality must be checked separately.
+
 `test/batching.mjs` checks real sequential GPU dispatch, bounded batches, pause/resume and cancellation with queued work, and image equality with single-tile rendering. `test/network-batching.mjs` uses a local WebSocket delay proxy and alternating single-tile/batched runs to measure network overhead. It defaults to `UPSTREAM_URL=http://127.0.0.1:3211` and adds 40 ms in each direction; set `UPSTREAM_URL` to your local test server. This is a controlled latency experiment on one GPU, not a physical-phone benchmark. Run GPU timing checks separately from other rendering tests.
 
 These are test-browser flags, not instructions for audience phones. Normal visitors use their browser's supported default configuration. The test scripts can target the live HTTPS link through `BASE_URL`.
 
 ## Scope and next improvements
 
-- A render contains 1–64 spheres and a plane, up to 2048 × 2048 pixels and 512 samples. Materials include diffuse/metallic surfaces, bounded emission, and a reflective floor. There are no mesh uploads, animations, transparent materials, or arbitrary jobs.
+- A render supports up to 64 objects in total (up to 64 spheres or 48 boxes), plus a plane or procedural dune terrain, at up to 2048 × 2048 pixels and 512 samples. Terrain intersections have a bounded 120-unit range. Materials include diffuse/metallic surfaces, bounded emission, and a reflective floor; sky effects include stars and aurora. There are no mesh uploads, animations, transparent materials, or arbitrary jobs.
 - It trusts the contents of accepted pixels. Lease validation prevents accidental duplicates and stale work; it does not prove computation was honest. No payments or rewards are involved.
 - Participant data is limited to chosen display names and computation metrics. Room IDs are shareable, so avoid sensitive content.
 - The room/client caps, bounded settings, origin checks, and payload limits suit a supervised demo. This is not a hardened public compute marketplace.

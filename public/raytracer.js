@@ -1,3 +1,5 @@
+import { intersectBox, intersectTerrain, environmentRadiance } from './procedural.js';
+
 const add = (a,b) => [a[0]+b[0],a[1]+b[1],a[2]+b[2]];
 const sub = (a,b) => [a[0]-b[0],a[1]-b[1],a[2]-b[2]];
 const mul = (a,s) => [a[0]*s,a[1]*s,a[2]*s];
@@ -14,7 +16,7 @@ export function cameraBasis(scene) {
 
 function hitScene(origin, direction, scene, maxDistance = 1e10) {
   let distance = maxDistance, material = null, normal;
-  if (Math.abs(direction[1]) > 1e-6) {
+  if (!(scene.terrain?.height>0) && Math.abs(direction[1]) > 1e-6) {
     const t = (-0.85-origin[1])/direction[1];
     if(t > 0.002 && t < distance) {
       distance=t; normal=[0,1,0];
@@ -28,6 +30,17 @@ function hitScene(origin, direction, scene, maxDistance = 1e10) {
     let t=-b-Math.sqrt(discriminant);
     if(t<0.002) t=-b+Math.sqrt(discriminant);
     if(t>0.002 && t<distance) {distance=t;material=sphere;normal=norm(sub(add(origin,mul(direction,t)),sphere.center));}
+  }
+  for(const box of scene.boxes||[]) {
+    const hit=intersectBox(origin,direction,box,distance);
+    if(hit) {distance=hit.distance;material=box;normal=hit.normal;}
+  }
+  if(scene.terrain?.height>0) {
+    const hit=intersectTerrain(origin,direction,scene.terrain,distance);
+    if(hit&&hit.distance<distance) {
+      distance=hit.distance;normal=hit.normal;
+      material={color:scene.ground,metal:scene.groundMetal??0,roughness:scene.groundRoughness??0.5};
+    }
   }
   return material ? { distance, material, normal } : null;
 }
@@ -52,8 +65,8 @@ export function renderTileCPU(scene, settings, tile) {
       for(let bounce=0;bounce<settings.bounces;bounce++) {
         const hit=hitScene(origin,direction,scene);
         if(!hit) {
-          const t=Math.min(1,Math.max(0,direction[1]*0.5+0.5));
-          for(let c=0;c<3;c++) sum[c]+=throughput[c]*(scene.skyBottom[c]*(1-t)+scene.skyTop[c]*t);
+          const environment=environmentRadiance(direction,scene);
+          for(let c=0;c<3;c++) sum[c]+=throughput[c]*environment[c];
           break;
         }
         const n=hit.normal,mat=hit.material;

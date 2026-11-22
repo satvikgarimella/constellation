@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Coordinator } from '../server/coordinator.js';
-import { packResult } from '../public/scene.js';
+import { packResult, PRESETS, validateScene } from '../public/scene.js';
 
 const socket=()=>({readyState:1,messages:[],send(data){this.messages.push(typeof data==='string'?JSON.parse(data):data);}});
 function setup() {
@@ -66,6 +66,22 @@ test('late viewers receive all completed pixels and ownership without host privi
   assert.equal(s.messages[0].isHost,false);assert.equal(s.messages[0].state.run.completed,2);
   assert.equal(s.messages.filter(m=>Buffer.isBuffer(m)).length,2);
   assert.equal(s.messages.find(m=>m.type==='tile-owners').owners.length,2);
+});
+
+test('a generated scene stays pending across replay until its own render starts',()=>{
+  const {c,r,host,enable,finish}=setup();enable(host);c.start(r,{width:256,samples:8});
+  while(r.run.status==='running')finish(host);
+  assert.equal(c.state(r).scenePending,false);
+  const renderedScene=r.run.scene,renderedPixels=r.run.results.get(0);
+  r.scene=validateScene(PRESETS.city);
+  assert.equal(c.state(r).scenePending,true);
+  assert.equal(r.run.scene,renderedScene,'Changing a scene must not relabel the rendered geometry');
+  const late=socket();c.connect(r,late,{label:'Late viewer'});
+  assert.equal(late.messages[0].state.scenePending,true);
+  assert.ok(late.messages.some(m=>Buffer.isBuffer(m)&&m.equals(renderedPixels)),'Old pixels remain available with a pending marker');
+  c.start(r,{width:256,samples:8});
+  assert.equal(c.state(r).scenePending,false);
+  assert.equal(r.run.scene.name,PRESETS.city.name);
 });
 
 test('explicit selection keeps ready outsiders waiting and produces a comparable solo/crowd pair',()=>{

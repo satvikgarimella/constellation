@@ -35,7 +35,7 @@ export class Coordinator {
     if(this.rooms.size >= 100) throw new Error('The studio is at capacity. Please try again later.');
     let id;
     do { id=randomBytes(3).toString('hex').toUpperCase(); } while(this.rooms.has(id));
-    const room={id, hostToken:randomBytes(24).toString('hex'), clients:new Map(), scene:structuredClone(PRESETS.orbit||PRESETS.solstice), run:null, sequence:0, leaseSequence:0, history:[], events:[], createdAt:this.now(), touchedAt:this.now()};
+    const room={id, hostToken:randomBytes(24).toString('hex'), clients:new Map(), scene:structuredClone(PRESETS.aurora), run:null, sequence:0, leaseSequence:0, history:[], events:[], createdAt:this.now(), touchedAt:this.now()};
     this.rooms.set(id,room);
     return room;
   }
@@ -201,7 +201,7 @@ export class Coordinator {
     const contributors=run?[...run.contributions.values()]:[];
     const clients=[...room.clients.values()],pixelSamples=run?run.completedPixels*run.settings.samples:0;
     return {
-      roomId:room.id,scene:room.scene,
+      roomId:room.id,scene:room.scene,scenePending:!!run&&room.scene!==run.scene,
       clients:clients.map(c=>({id:c.id,label:c.label,enabled:c.enabled,backend:c.backend,color:c.color,tiles:c.tiles,pixels:c.pixels,computeMs:c.durationMs,busy:!!c.job,batchSize:c.batchSize,inflight:c.jobs.size,selected:eligible(run,c)})),
       deviceCounts:{connected:clients.length,recruited:clients.filter(c=>c.backend).length,ready:clients.filter(c=>eligible(null,c)).length,eligible:clients.filter(c=>eligible(run,c)).length,contributing:contributors.length},
       run:run?{id:run.id,status:run.status,settings:run.settings,workerIds:run.workerIds,selectionMode:run.workerIds?'selected':'open',initialWorkers:run.initialWorkers,completed:run.results.size,total:run.tiles.length,inflight:run.inflight.size,retries:run.retries,retryReasons:run.retryReasons,lastReassignment:run.lastReassignment,startedAt:run.startedAt,finishedAt:run.finishedAt,completedPixels:run.completedPixels,pixelSamples,pixelSamplesPerSecond:elapsed>0?pixelSamples/elapsed:0,elapsed,tilesPerSecond:elapsed>0?run.results.size/elapsed:0,contributors,fingerprint:run.fingerprint}:null,

@@ -1,5 +1,6 @@
 export const TILE_SIZE = 32;
 export const MAX_SPHERES = 64;
+export const MAX_BOXES = 48;
 
 // Two non-intersecting orbital paths around a floating chrome core. Each bead
 // is real geometry: it casts shadows and appears in other objects' reflections.
@@ -21,7 +22,36 @@ const orbitSpheres = [
   {center:[2.1,-0.37,1.45],radius:0.48,color:[0.10,0.49,0.64],metal:0.91,roughness:0.04},
   {center:[0.15,-0.60,2.55],radius:0.25,color:[0.91,0.86,0.66],metal:0.92,roughness:0.025}
 ];
+
+// Buildings and their luminous facade bands are actual box geometry. They
+// participate in the same intersections, shadows, and reflections as spheres.
+const cityBoxes = [];
+for (let row = 0; row < 3; row++) for (let column = 0; column < 4; column++) {
+  const x = (column - 1.5) * 3.2, z = (row - 1) * 3.9;
+  const height = 2.8 + ((column * 7 + row * 11) % 7) * 0.72;
+  cityBoxes.push({center:[x,height / 2 - 0.85,z],size:[1.8,height,2.2],
+    color:[0.12 + column * 0.035,0.18,0.3 + row * 0.035],metal:0.5,roughness:0.2});
+  for (const fraction of [0.4,0.8]) cityBoxes.push({center:[x,height * fraction - 0.85,z],size:[1.84,0.075,2.24],
+    color:row % 2 ? [1,0.5,0.17] : [0.15,0.8,1],metal:0.15,roughness:0.25,
+    emission:row % 2 ? [2.5,0.7,0.12] : [0.05,1.4,2.8]});
+}
 export const PRESETS = {
+  aurora: {
+    name:'Aurora Desert', description:'Rolling sand dunes beneath luminous northern lights and a star-filled sky.',
+    camera:[12,3.6,18],target:[0,2.2,-14],fov:55,
+    skyTop:[0.004,0.009,0.028],skyBottom:[0.045,0.075,0.12],
+    ground:[0.72,0.47,0.25],groundMetal:0,groundRoughness:0.8,
+    sun:[0.32,0.29,0.25],exposure:1.6,
+    terrain:{height:2.8,scale:0.48},aurora:{strength:1.8,color:[0.08,1,0.48]},stars:0.85,
+    spheres:[],boxes:[]
+  },
+  city: {
+    name:'Neon City',description:'A skyline of solid towers and glowing facade bands reflected in a polished plaza.',
+    camera:[14,10,19],target:[0,1.6,0],fov:48,
+    skyTop:[0.012,0.022,0.065],skyBottom:[0.24,0.13,0.24],
+    ground:[0.12,0.16,0.23],groundMetal:0.75,groundRoughness:0.065,
+    sun:[0.4,0.48,0.7],exposure:1.45,stars:0.5,spheres:[],boxes:cityBoxes
+  },
   orbit: {
     name:'Orbit',description:'A chrome core. Fifty orbiting beads. Every reflection traced by your devices.',
     camera:[5.8,3.75,8.6],target:[0,1.15,0],fov:36,
@@ -73,9 +103,14 @@ const vec = (v, fallback, lo, hi) => Array.from({ length: 3 }, (_, i) => finite(
 
 export function validateScene(input) {
   const base = PRESETS.solstice;
-  if (!input || !Array.isArray(input.spheres) || input.spheres.length < 1 || input.spheres.length > MAX_SPHERES) throw new Error(`A scene needs between 1 and ${MAX_SPHERES} spheres.`);
-  const camera = vec(input.camera, base.camera, -15, 15);
-  const target = vec(input.target, base.target, -10, 10);
+  if (!input || !Array.isArray(input.spheres) || input.spheres.length > MAX_SPHERES) throw new Error(`A scene supports up to ${MAX_SPHERES} spheres.`);
+  if (input.boxes !== undefined && (!Array.isArray(input.boxes) || input.boxes.length > MAX_BOXES)) throw new Error(`A scene supports up to ${MAX_BOXES} boxes.`);
+  const boxes = input.boxes || [];
+  if (input.spheres.length + boxes.length > 64) throw new Error('A scene supports up to 64 objects in total.');
+  const terrain = {height:finite(input.terrain?.height,0,0,3),scale:finite(input.terrain?.scale,0.4,0.08,1)};
+  if (!input.spheres.length && !boxes.length && !terrain.height) throw new Error('A scene needs spheres, boxes, or terrain.');
+  const camera = vec(input.camera, base.camera, -60, 60);
+  const target = vec(input.target, base.target, -40, 40);
   if (Math.hypot(...camera.map((v, i) => v - target[i])) < 0.1 || Math.hypot(camera[0] - target[0], camera[2] - target[2]) < 0.1) throw new Error('Camera must look toward the scene from an angle.');
   return {
     name: String(input.name || 'Custom scene').slice(0, 60),
@@ -84,12 +119,19 @@ export function validateScene(input) {
     skyTop: vec(input.skyTop, base.skyTop, 0, 1), skyBottom: vec(input.skyBottom, base.skyBottom, 0, 1),
     ground: vec(input.ground, base.ground, 0.01, 1), sun: vec(input.sun, base.sun, 0, 1),
     groundMetal:finite(input.groundMetal,0,0,1),groundRoughness:finite(input.groundRoughness,0.5,0,1),
+    terrain,aurora:{strength:finite(input.aurora?.strength,0,0,3),color:vec(input.aurora?.color,[0.08,1,0.48],0,1)},stars:finite(input.stars,0,0,1),
     spheres: input.spheres.map(s => {
       if(!s||typeof s!=='object') throw new Error('Every sphere must describe a material and position.');
       const radius = finite(s.radius, 0.7, 0.1, 3);
-      const center = vec(s.center, [0, 0, 0], -6, 6);
+      const center = vec(s.center, [0, 0, 0], -40, 40);
       center[1] = Math.max(center[1], radius - 0.85);
       return { center, radius, color: vec(s.color, [0.6, 0.6, 0.6], 0.01, 1), metal: finite(s.metal, 0, 0, 1), roughness: finite(s.roughness, 0.1, 0, 1),emission:vec(s.emission,[0,0,0],0,8) };
+    }),
+    boxes: boxes.map(b => {
+      if (!b || typeof b !== 'object') throw new Error('Every box must describe a material, position, and size.');
+      const size=vec(b.size,[1,1,1],0.1,20),center=vec(b.center,[0,0,0],-40,40);
+      center[1]=Math.max(center[1],size[1]/2-0.85);
+      return {center,size,color:vec(b.color,[0.4,0.5,0.7],0.01,1),metal:finite(b.metal,0,0,1),roughness:finite(b.roughness,0.3,0,1),emission:vec(b.emission,[0,0,0],0,8)};
     })
   };
 }

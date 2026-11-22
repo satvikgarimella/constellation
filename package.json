@@ -13,6 +13,7 @@
     "test": "node --test test/*.test.js",
     "test:browser": "node test/browser.mjs",
     "test:webgpu": "node test/webgpu.mjs",
+    "test:scenes": "node test/scenes.mjs",
     "test:demo": "node test/demo.mjs",
     "test:controls": "node test/controls.mjs",
     "test:batching": "node test/batching.mjs",

@@ -11,6 +11,7 @@ try {
   const errors=[];p.on('pageerror',e=>errors.push(e.message));p.on('console',m=>{if(m.type()==='error')errors.push(m.text());else if(m.type()==='info')console.log(m.text());});
   await p.goto(process.env.BASE_URL||'http://localhost:3210');
   await p.waitForFunction(()=>document.querySelector('#connection')?.textContent==='Live connection');
+  await p.locator('[data-preset="orbit"]').click();
   const adapter=await p.evaluate(async()=>{const a=await navigator.gpu?.requestAdapter();return a?{vendor:a.info.vendor,architecture:a.info.architecture,fallback:a.info.isFallbackAdapter}:null;});
   assert.ok(adapter,'No WebGPU adapter. Set GPU_ARGS appropriately for your machine.');
   await p.locator('#contribute-button').click();

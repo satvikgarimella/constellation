@@ -6,7 +6,7 @@
 
 Constellation makes distributed computing visible: viewers see an image assemble from independently calculated tiles, can trace tiles to individual contributors, and watch the system recover when a device disappears. The immediate use is a shared graphics studio and an interactive lesson in parallel computation. Larger creator render farms are a possible direction, not a demonstrated product claim.
 
-The default **Orbit** scene has 54 spheres, emissive orange/blue accents, a chrome core, and a reflective floor. The scene limit is 64 spheres. Workloads go up to **2048 × 2048 / 512 samples**, so the demo can scale from a quick connection check to a substantial real render.
+The default **Aurora Desert** scene has real dune geometry beneath procedural northern lights and stars. **Neon City** adds solid towers and luminous facade bands reflected in a plaza; **Orbit** retains the original chrome sculpture and orbiting beads. Scenes support up to 64 objects total, including up to 48 boxes, plus terrain and sky effects. Workloads go up to **2048 × 2048 / 512 samples**, so the demo can scale from a quick connection check to a substantial real render.
 
 ## Start the phone demo
 

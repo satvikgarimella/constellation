@@ -17,7 +17,7 @@ test('independent tiles reconstruct exactly the same image as a full CPU render'
 });
 
 test('scene validation bounds workload and rejects invalid camera geometry',()=>{
-  assert.throws(()=>validateScene({...PRESETS.solstice,spheres:Array(MAX_SPHERES+1).fill(PRESETS.solstice.spheres[0])}),/1 and 64/);
+  assert.throws(()=>validateScene({...PRESETS.solstice,spheres:Array(MAX_SPHERES+1).fill(PRESETS.solstice.spheres[0])}),/up to 64/);
   assert.throws(()=>validateScene({...PRESETS.solstice,camera:[0,1,0],target:[0,0,0]}),/angle/);
   const scene=validateScene({...PRESETS.solstice,exposure:Infinity,fov:900,spheres:[{radius:100,center:[0,-20,0],color:[-1,2,NaN]}]});
   assert.equal(scene.fov,75);assert.equal(scene.spheres[0].radius,3);

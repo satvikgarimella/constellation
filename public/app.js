@@ -6,7 +6,7 @@ const logo=`<svg viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M20
 const arrow='<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10h12m-5-5 5 5-5 5" stroke="currentColor" stroke-width="1.5"/></svg>';
 let roomId,token,state,config,ws,clientId,isHost=false,worker=null,backend=null,contributing=false,wantsToContribute=false,currentJob=null,connected=false,currentRunId=null,roomScene=null,selectedPreset='orbit',joinURL='',reconnectTimer,toastTimer,wakeLock=null,initialized=false;
 let chart=[],lastChartTime=0,owners=new Map(),receivedTiles=new Set(),metricsFetchedAt=0;
-let comparison=null,baselineDevice='',rendererReason='',generating=false,lastRecoveryKey='';
+let comparison=null,baselineDevice='',rendererReason='',generating=false,lastRecoveryKey='',scenePending=false;
 let jobQueue=[];
 // Small batches amortize network round trips. Keep one GPU operation in flight
 // because the renderer reuses its uniform, output, and readback buffers.
@@ -25,12 +25,12 @@ function studioMarkup() {
   <main class="studio"><section class="intro"><div><div class="eyebrow"><span class="tiny-star">✳</span> A BROWSER-POWERED RENDER STUDIO</div><h1>Every device. <span>Part of the picture.</span></h1></div><div class="room-tag">YOUR CONSTELLATION <strong id="room-code"></strong></div></section>
   <section class="demo-strip"><div><span class="demo-step">01</span><strong>Invite the room</strong><span>Scan the QR</span></div><div><span class="demo-step">02</span><strong>Contribute compute</strong><span>Keep phones open</span></div><div><span class="demo-step">03</span><strong>Render together</strong><span>Watch every tile arrive</span></div><span id="network-status" class="network-status">Checking connection…</span></section>
   <section class="stats" aria-label="Live render statistics"><div><span class="stat-label">Contributing devices</span><strong id="stat-devices">0 <small>online</small></strong></div><div><span class="stat-label">Tiles rendered</span><strong id="stat-tiles">0 <small>/ —</small></strong></div><div><span class="stat-label" title="Completed pixels multiplied by samples, divided by elapsed seconds">Render throughput</span><strong id="stat-rate">— <small>M samples / sec</small></strong></div><div><span class="stat-label">Elapsed time</span><strong id="stat-time">—</strong></div><div><span class="stat-label">Recovered tiles</span><strong id="stat-retries">0</strong></div></section>
-  <section class="workbench"><aside class="scene-panel panel"><div class="panel-heading"><span class="section-number">01</span><h2>The scene</h2></div><p class="muted small">Choose a world to render together.</p><div class="presets">${Object.entries(PRESETS).sort(([a],[b])=>a==='orbit'?-1:b==='orbit'?1:0).map(([id,s])=>`<button class="preset ${id===selectedPreset?'selected':''}" data-preset="${id}"><span class="preset-art ${id}"><i></i><i></i><i></i></span><span><strong>${s.name}</strong><small>${id==='orbit'?'Chrome & luminous':id==='solstice'?'Warm & reflective':id==='lunar'?'Cool & cinematic':'Soft & sunlit'}</small></span><span class="selection-dot"></span></button>`).join('')}</div>
-  <div class="divider"></div><div class="label-row"><label for="prompt">Describe an abstract scene</label><span class="tag" id="gemini-tag">GEMINI</span></div><textarea id="prompt" rows="3" maxlength="600" placeholder="A miniature solar system with glowing planets…"></textarea><button class="button secondary wide" id="generate-button">Generate scene <span>✧</span></button><p class="hint" id="gemini-hint">Checking scene generation…</p>
+  <section class="workbench"><aside class="scene-panel panel"><div class="panel-heading"><span class="section-number">01</span><h2>The scene</h2></div><p class="muted small">Choose a world to render together.</p><div class="presets">${Object.entries(PRESETS).map(([id,s])=>`<button class="preset ${id===selectedPreset?'selected':''}" data-preset="${id}"><span class="preset-art ${id}"><i></i><i></i><i></i></span><span><strong>${s.name}</strong><small>${{aurora:'Dunes & northern lights',city:'Towers & neon reflections',orbit:'Chrome & luminous',solstice:'Warm & reflective',lunar:'Cool & cinematic',orchard:'Soft & sunlit'}[id]}</small></span><span class="selection-dot"></span></button>`).join('')}</div>
+  <div class="divider"></div><div class="label-row"><label for="prompt">Describe your scene</label><span class="tag" id="gemini-tag">GEMINI</span></div><textarea id="prompt" rows="3" maxlength="600" placeholder="A desert with northern lights, or a neon city skyline…"></textarea><button class="button secondary wide" id="generate-button">Generate scene <span>✧</span></button><p class="hint" id="gemini-hint">Checking scene generation…</p>
   <div class="divider"></div><div class="quality-picks" aria-label="Render workload"><button data-workload="preview">Quick check</button><button data-workload="showcase">Live demo</button><button data-workload="poster">Poster</button></div><div class="setting-grid"><label>Resolution<select id="resolution"><option value="256">256 × 256</option><option value="512" selected>512 × 512</option><option value="768">768 × 768</option><option value="1024">1024 × 1024</option><option value="2048">2048 × 2048</option></select></label><label>Quality<select id="samples"><option value="8">8 samples</option><option value="16">16 samples</option><option value="32" selected>32 samples</option><option value="64">64 samples</option><option value="128">128 samples</option><option value="256">256 samples</option><option value="512">512 samples</option></select></label></div>
   <button class="button primary wide render-button" id="render-button" disabled>Start render ${arrow}</button><button class="button danger wide hidden" id="stop-button">Stop render</button><p id="render-hint" class="hint centered">Connect a contributing device to begin.</p></aside>
   <section class="render-panel panel"><div class="render-heading"><div><span class="live-dot" id="render-dot"></span><h2 id="scene-name">Orbit</h2><span class="tag" id="render-status">READY</span></div><button class="icon-button" id="download-button" title="Download rendered image" aria-label="Download rendered image" disabled><svg viewBox="0 0 20 20" fill="none"><path d="M10 3v9m-3-3 3 3 3-3M4 13v4h12v-4" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
-  <div class="canvas-wrap"><canvas id="render-canvas" width="512" height="512" aria-label="Distributed rendered image"></canvas><canvas id="owner-canvas" width="512" height="512" aria-hidden="true"></canvas><div class="canvas-empty" id="canvas-empty"><div class="orbital"><span></span><span></span><i></i><b></b><em></em></div><h3>A shared effort.<br>A clearer picture.</h3><p>Your image will appear here as devices<br>finish their part of the render.</p><button class="button secondary" id="empty-contribute">Use this device ${arrow}</button></div><div class="canvas-caption"><span id="canvas-details">PATH TRACED · 32 × 32 TILES</span><span id="canvas-percent">0%</span></div></div>
+  <p class="scene-description" id="scene-description"></p><div class="canvas-wrap"><canvas id="render-canvas" width="512" height="512" aria-label="Distributed rendered image"></canvas><canvas id="owner-canvas" width="512" height="512" aria-hidden="true"></canvas><div class="canvas-empty" id="canvas-empty"><div class="orbital"><span></span><span></span><i></i><b></b><em></em></div><h3>A shared effort.<br>A clearer picture.</h3><p>Your image will appear here as devices<br>finish their part of the render.</p><button class="button secondary" id="empty-contribute">Use this device ${arrow}</button></div><div class="scene-pending hidden" id="scene-pending" role="status">New scene ready. Start a render to update this image.</div><div class="canvas-caption"><span id="canvas-details">PATH TRACED · 32 × 32 TILES</span><span id="canvas-percent">0%</span></div></div>
   <div id="recovery-banner" class="recovery-banner hidden" role="status"></div><div class="progress-track"><div id="progress-bar"></div></div><div class="render-footer"><label class="toggle-label"><input type="checkbox" id="show-owners"><span class="toggle"></span>Contribution map</label><span id="render-footer-status">Waiting for the first device</span></div>
   <div class="benchmark"><div class="benchmark-result"><span class="benchmark-icon">↗</span><div><strong id="benchmark-title">One device. Then the whole room.</strong><p id="benchmark-copy">Compare two real renders with identical scene and settings.</p></div></div><div class="benchmark-controls"><label>Solo device<select id="baseline-device" aria-label="Solo benchmark device"><option value="">Waiting for devices</option></select></label><button class="button primary" id="compare-button" disabled>Compare 1 vs crowd ${arrow}</button><button class="icon-button" id="export-report" aria-label="Download benchmark report" title="Download benchmark report" disabled>↓</button></div><p id="compare-hint" class="hint">Connect at least two devices using the same renderer.</p></div></section>
   <aside class="devices-panel panel"><div class="panel-heading"><span class="section-number">02</span><h2>The constellation</h2><span class="count-pill" id="device-count">0</span></div><p class="muted small">A little power from everyone.</p>
@@ -71,7 +71,7 @@ async function boot() {
       $('#qr-image').src=qr;$('#dialog-qr').src=qr;$('#share-url').value=joinURL;
       $('#share-note').textContent=base.startsWith('https:')?'WebGPU is available on supported browsers.':'Local link: devices must be on the same Wi-Fi. HTTP connections use the CPU fallback; HTTPS enables WebGPU.';
       $('#generate-button').disabled=!config.gemini;$('#prompt').disabled=!config.gemini;
-      $('#gemini-hint').textContent=config.gemini?'Creates compositions of spheres on a flat floor. Gemini can change their arrangement, materials, camera, and lighting.':'AI scene creation is not connected. The presets are ready to render.';
+      $('#gemini-hint').textContent=config.gemini?'Create dunes, skylines, or abstract scenes using terrain, boxes, and spheres. Add stars or northern lights.':'AI scene creation is not connected. The presets are ready to render.';
       $('#gemini-tag').classList.toggle('inactive',!config.gemini);
       $('#telemetry-label').textContent=config.tigerData?(config.databaseReady?'TIGER DATA':'CONNECTING'):'LOCAL';
     }
@@ -172,9 +172,9 @@ function bindEvents() {
   };
   for(const el of document.querySelectorAll('[data-preset]')) el.onclick=()=>{
     if(state.run?.status==='running'||comparison||!isHost)return;
-    selectedPreset=el.dataset.preset;roomScene=structuredClone(PRESETS[selectedPreset]);
+    selectedPreset=el.dataset.preset;roomScene=structuredClone(PRESETS[selectedPreset]);scenePending=true;
     document.querySelectorAll('[data-preset]').forEach(b=>b.classList.toggle('selected',b===el));
-    $('#scene-name').textContent=roomScene.name;
+    $('#scene-name').textContent=roomScene.name;update(state);
   };
   $('#render-button').onclick=()=>{
     if(!isHost)return;
@@ -194,18 +194,19 @@ function bindEvents() {
     try {
       const response=await fetch(`/api/rooms/${roomId}/scene`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({prompt})});
       const result=await response.json();if(!response.ok)throw new Error(result.error);
-      roomScene=result.scene;selectedPreset=null;document.querySelectorAll('[data-preset]').forEach(b=>b.classList.remove('selected'));$('#scene-name').textContent=roomScene.name;toast('Scene created. Start a render to see it.');
+      roomScene=result.scene;selectedPreset=null;scenePending=true;document.querySelectorAll('[data-preset]').forEach(b=>b.classList.remove('selected'));$('#scene-name').textContent=roomScene.name;toast('Scene created. Start a render to see it.');
     } catch(error){toast(error.message);}finally{generating=false;button.innerHTML='Generate scene <span>✧</span>';update(state);}
   };
 }
 
 function update(next) {
   state=next;const run=state.run;
-  if(!isHost&&state.scene)roomScene=state.scene;
+  if(!isHost&&state.scene){roomScene=state.scene;scenePending=!!state.scenePending;}
+  else if(state.scenePending)scenePending=true;
   const active=state.clients.filter(c=>c.enabled),running=run?.status==='running';
   const percent=run?Math.round(run.completed/run.total*100):0;
   if(run&&run.id!==currentRunId) {
-    currentRunId=run.id;receivedTiles.clear();owners.clear();chart=[];lastChartTime=0;
+    currentRunId=run.id;scenePending=!!state.scenePending;receivedTiles.clear();owners.clear();chart=[];lastChartTime=0;
     const canvas=$('#render-canvas');canvas.width=run.settings.width;canvas.height=run.settings.height;
     if($('#owner-canvas')){$('#owner-canvas').width=canvas.width;$('#owner-canvas').height=canvas.height;}
     if(!joinView)$('#sparkline').setAttribute('points','0,53 240,53');
@@ -223,7 +224,9 @@ function update(next) {
   $('#present-render').disabled=!isHost||!connected||(!running&&(generating||!!comparison||!active.length));$('#present-render').textContent=running?'Stop render':'Render';
   $('#stat-time').textContent=run?seconds(run.elapsed):'—';
   $('#scene-name').textContent=roomScene?.name||state.scene.name;
-  $('#render-status').textContent=running?'RENDERING':run?.status==='complete'?'COMPLETE':run?.status==='cancelled'?'STOPPED':'READY';
+  $('#scene-description').textContent=roomScene?.description||state.scene.description;
+  $('#scene-pending').classList.toggle('hidden',!scenePending||running);
+  $('#render-status').textContent=running?'RENDERING':scenePending?'SCENE READY':run?.status==='complete'?'COMPLETE':run?.status==='cancelled'?'STOPPED':'READY';
   $('#render-status').classList.toggle('active',running);$('#render-dot').classList.toggle('active',running);
   $('#canvas-percent').textContent=`${percent}%`;$('#progress-bar').style.width=`${percent}%`;
   $('#canvas-details').textContent=run?`${run.settings.width} × ${run.settings.height} · ${run.settings.samples} SAMPLES · ${run.settings.bounces} BOUNCES`:'PATH TRACED · 32 × 32 TILES';
@@ -235,7 +238,7 @@ function update(next) {
   $('#generate-button').disabled=!config.gemini||running||!!comparison||generating||!isHost;
   document.querySelectorAll('[data-preset]').forEach(b=>b.disabled=running||!!comparison||generating||!isHost);
   $('#download-button').disabled=!run?.completed;
-  $('#render-footer-status').textContent=running?`${run.inflight} tiles in flight · ${run.retries} reassigned`:run?.status==='complete'?`Completed by ${run.contributors.length} device${run.contributors.length===1?'':'s'}`:run?.status==='cancelled'?'Render stopped — partial image available':'Waiting for the first device';
+  $('#render-footer-status').textContent=scenePending&&!running?'New scene ready — select Start render.':running?`${run.inflight} tiles in flight · ${run.retries} reassigned`:run?.status==='complete'?`Completed by ${run.contributors.length} device${run.contributors.length===1?'':'s'}`:run?.status==='cancelled'?'Render stopped — partial image available':'Waiting for the first device';
   $('#device-count').textContent=active.length;
   const recovery=run?.lastReassignment;$('#recovery-banner').classList.toggle('hidden',!recovery);
   if(recovery){$('#recovery-banner').textContent=`Recovered ${run.retries} tile${run.retries===1?'':'s'} · ${recovery.label} ${recovery.reason==='disconnected'?'disconnected':'paused or timed out'}. ${eligible?'Remaining devices take over.':'Waiting for a device to resume.'}`;const key=`${run.id}:${run.retries}`;if(key!==lastRecoveryKey){lastRecoveryKey=key;toast(eligible?'A tile was recovered. The remaining devices are continuing.':'Unfinished tiles are saved. Waiting for a contributor to resume.');}}

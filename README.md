@@ -82,6 +82,8 @@ node --env-file-if-exists=.env scripts/verify-services.mjs
 
 Use `--gemini` or `--database` to check only one. The verifier saves sanitized results in `artifacts/service-verification.json` and exits unsuccessfully for missing credentials or failed requests. It makes a real Gemini request and writes/reads one tagged synthetic database event; that row remains in the database. A passing database check establishes PostgreSQL functionality, not the identity of its hosting provider.
 
+For the complete Gemini UI path, start the configured app and run `node test/services-live.mjs` with the same Playwright/WebGPU settings as the browser tests below. This opt-in test makes up to two real generation requests, validates the generated scene, renders it on WebGPU, compares the pixels with the CPU reference, and saves `artifacts/gemini-ui-report.json` plus a screenshot. It does not claim database verification.
+
 ### Gemini scene generation
 
 Set `GEMINI_API_KEY`. The host can describe a composition; Gemini returns structured JSON containing geometry, materials, camera, and lighting. The server bounds and validates it before sending it to the renderers. The model does not return executable JavaScript or WGSL.

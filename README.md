@@ -2,7 +2,13 @@
 
 **Turn a room of browsers into a shared render farm.** Participants scan a QR code, opt in, and calculate separate tiles of a path-traced image. The studio assembles their pixels live, shows each device's contribution, and reassigns unfinished work when someone leaves.
 
-This is a working hackathon prototype for collaborative rendering and teaching distributed systems. It supports its own sphere-and-ground scene format. It is not a Blender renderer or a general-purpose distributed GPU.
+This is a working hackathon prototype for collaborative rendering and teaching distributed systems. Its scene format supports spheres, boxes, dune terrain, and procedural skies. It is not a Blender renderer or a general-purpose distributed GPU.
+
+## Hosted demo
+
+Open **[constellation-render.onrender.com](https://constellation-render.onrender.com)** on your laptop to create a host room. Select **Invite devices**, have contributors scan the QR and opt in, then choose a preset and **Start render**. The coordinator runs on Render independently of your laptop; keep the host tab open to control that room.
+
+The service uses Render Free in a Hobby workspace. An idle service can take about a minute to wake, and restarts clear rooms. Start with a small room and modest resolution because image traffic counts against the free bandwidth allowance. Gemini generation and database analytics require their server-side credentials. See the [Render deployment guide](deploy/RENDER.md) for configuration, limits, and verification.
 
 ## Run locally
 

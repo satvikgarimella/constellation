@@ -1,0 +1,22 @@
+{
+  "name": "constellation-render",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An opt-in browser render farm with WebGPU, live scheduling, and measurable contributions.",
+  "engines": { "node": ">=22.9" },
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "dev": "node --env-file-if-exists=.env --watch server/index.js",
+    "test": "node --test test/*.test.js",
+    "test:browser": "node test/browser.mjs",
+    "test:webgpu": "node test/webgpu.mjs",
+    "check": "node --check server/index.js && node --check server/coordinator.js && node --check public/app.js && node --check public/render-worker.js"
+  },
+  "dependencies": {
+    "pg": "^8.16.3",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.3"
+  }
+}

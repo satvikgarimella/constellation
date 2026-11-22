@@ -1,0 +1,40 @@
+// Optional hardware GPU test. GPU_ARGS can select the local backend; see README.
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { PRESETS, validateScene } from '../public/scene.js';
+import { renderTileCPU } from '../public/raytracer.js';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
+const browser=await chromium.launch({headless:true,args:JSON.parse(process.env.GPU_ARGS||'[]')});
+const directory=new URL('../artifacts/',import.meta.url);await mkdir(directory,{recursive:true});
+try {
+  const p=await browser.newPage({viewport:{width:1440,height:1080},reducedMotion:'reduce'});p.setDefaultTimeout(20000);
+  const errors=[];p.on('pageerror',e=>errors.push(e.message));p.on('console',m=>{if(m.type()==='error')errors.push(m.text());else if(m.type()==='info')console.log(m.text());});
+  await p.goto(process.env.BASE_URL||'http://localhost:3210');
+  await p.waitForFunction(()=>document.querySelector('#connection')?.textContent==='Live connection');
+  const adapter=await p.evaluate(async()=>{const a=await navigator.gpu?.requestAdapter();return a?{vendor:a.info.vendor,architecture:a.info.architecture,fallback:a.info.isFallbackAdapter}:null;});
+  assert.ok(adapter,'No WebGPU adapter. Set GPU_ARGS appropriately for your machine.');
+  await p.locator('#contribute-button').click();
+  await p.waitForFunction(()=>document.querySelector('#backend-tag')?.textContent==='WEBGPU');
+  await p.selectOption('#resolution','256');await p.selectOption('#samples','32');
+  await p.locator('#render-button').click();await p.waitForFunction(()=>document.querySelector('#render-status')?.textContent==='COMPLETE');
+  const pixels=await p.locator('#render-canvas').evaluate(c=>Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data));
+  const cpu=renderTileCPU(validateScene(PRESETS.solstice),{width:256,height:256,samples:32,bounces:4},{x:0,y:0,width:256,height:256});
+  const error=pixels.reduce((sum,v,i)=>sum+Math.abs(v-cpu[i]),0)/pixels.length;
+  assert.ok(error<5,`WebGPU/CPU mean pixel difference too large: ${error}`);
+  assert.ok(new Set(pixels).size>100);assert.deepEqual(errors,[]);
+  await p.selectOption('#resolution','512');await p.selectOption('#samples','64');await p.locator('#render-button').click();
+  await p.waitForFunction(()=>document.querySelector('#render-canvas')?.width===512&&document.querySelector('#render-status')?.textContent==='COMPLETE');
+  const download=p.waitForEvent('download');await p.locator('#download-button').click();await(await download).saveAs(new URL('render-webgpu.png',directory).pathname);
+  await p.screenshot({path:new URL('studio-webgpu.png',directory).pathname,fullPage:true});
+  await p.setViewportSize({width:390,height:844});await p.screenshot({path:new URL('studio-mobile.png',directory).pathname,fullPage:true});
+  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  const id=(await p.locator('#room-code').textContent()).trim();
+  const mobile=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'});
+  const phone=await mobile.newPage();await phone.goto(`${process.env.BASE_URL||'http://localhost:3210'}/join/${id}`);
+  await phone.waitForFunction(()=>document.querySelector('#connection')?.textContent==='Live connection');
+  await phone.locator('#device-name').fill('Audience phone');
+  await phone.locator('#contribute-button').click();await phone.waitForFunction(()=>document.querySelector('#backend-tag')?.textContent==='WEBGPU');
+  await phone.screenshot({path:new URL('phone-contributor.png',directory).pathname,fullPage:true});
+  const report={adapter,meanAbsolutePixelError:error,consoleErrors:errors};
+  await writeFile(new URL('webgpu-report.json',directory),JSON.stringify(report,null,2));console.log(report);
+} finally {await browser.close();}

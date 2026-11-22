@@ -1,0 +1,13 @@
+FROM node:24-alpine
+WORKDIR /app
+RUN npm install --global pnpm@11.25.0
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --prod --frozen-lockfile
+COPY public ./public
+COPY server ./server
+RUN mkdir -p /app/data && chown -R node:node /app
+USER node
+ENV NODE_ENV=production HOST=0.0.0.0 PORT=3210 DATA_DIR=/app/data
+EXPOSE 3210
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD node -e "fetch('http://127.0.0.1:3210/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "server/index.js"]

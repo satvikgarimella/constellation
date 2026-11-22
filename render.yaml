@@ -9,7 +9,7 @@ services:
     branch: main
     autoDeployTrigger: "off"
     buildCommand: npx --yes pnpm@11.25.0 install --prod --frozen-lockfile
-    startCommand: PUBLIC_URL="${PUBLIC_URL:-$RENDER_EXTERNAL_URL}" node server/index.js
+    startCommand: PUBLIC_URL="${PUBLIC_URL:-$RENDER_EXTERNAL_URL}" node --env-file-if-exists=/etc/secrets/constellation.env server/index.js
     healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION

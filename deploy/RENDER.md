@@ -14,7 +14,7 @@ In the [Render dashboard](https://dashboard.render.com/), create a Blueprint fro
 | Region | Ohio |
 | Compute plan | Free |
 | Build command | `npx --yes pnpm@11.25.0 install --prod --frozen-lockfile` |
-| Start command | `PUBLIC_URL="${PUBLIC_URL:-$RENDER_EXTERNAL_URL}" node server/index.js` |
+| Start command | `PUBLIC_URL="${PUBLIC_URL:-$RENDER_EXTERNAL_URL}" node --env-file-if-exists=/etc/secrets/constellation.env server/index.js` |
 | Health check | `/healthz` |
 | Auto-deploy | Off |
 | `NODE_VERSION` | `24.22.1` |
@@ -26,6 +26,8 @@ In the [Render dashboard](https://dashboard.render.com/), create a Blueprint fro
 Leave `PORT` platform-managed. There is no frontend build step. The start command uses Render's generated HTTPS address for QR codes and sharing; set `PUBLIC_URL` explicitly only if using a different configured HTTPS domain. [Node versions](https://render.com/docs/node-version), [default environment variables](https://render.com/docs/environment-variables), [WebSockets](https://render.com/docs/websocket)
 
 Enter `GEMINI_API_KEY` and `DATABASE_URL` privately in Render's environment settings. The Blueprint prompts for these values with `sync: false`; no credentials are stored in Git. Use the existing database connection string with `sslmode=verify-full`, retaining certificate verification. Presets work without these optional integrations. Their providers' quotas and charges remain separate from Render. [Environment variables and secrets](https://render.com/docs/configure-environment-variables)
+
+For CLI deployment, the same credentials can be uploaded as a Render secret file named `constellation.env`. The start command reads it from `/etc/secrets/constellation.env` if present. Include only `GEMINI_API_KEY` and `DATABASE_URL` in this file; keep host, port, and public URL in the service configuration. This keeps secret values out of command-line arguments. Never commit the secret file.
 
 ## Verify the deployed URL
 

@@ -1,10 +1,11 @@
 struct Params {
   origin: vec4<f32>, right: vec4<f32>, up: vec4<f32>, forward: vec4<f32>,
   skyTop: vec4<f32>, skyBottom: vec4<f32>, ground: vec4<f32>, sun: vec4<f32>,
-  settings: vec4<f32>, tile: vec4<u32>, misc: vec4<f32>
+  settings: vec4<f32>, tile: vec4<u32>, misc: vec4<f32>, groundSurface: vec4<f32>
 }
+// surface.x is roughness; surface.yzw holds emission RGB.
 struct Sphere { centerRadius: vec4<f32>, colorMetal: vec4<f32>, surface: vec4<f32> }
-struct Hit { distance: f32, normal: vec3<f32>, color: vec3<f32>, metal: f32, roughness: f32, found: bool }
+struct Hit { distance: f32, normal: vec3<f32>, color: vec3<f32>, metal: f32, roughness: f32, emission: vec3<f32>, found: bool }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage,read> spheres: array<Sphere>;
 @group(0) @binding(2) var<storage,read_write> pixels: array<u32>;
@@ -18,10 +19,10 @@ fn randomUnit() -> vec3<f32> {
   return vec3<f32>(r*cos(a),z,r*sin(a));
 }
 fn intersect(origin:vec3<f32>,direction:vec3<f32>) -> Hit {
-  var h=Hit(1e10,vec3<f32>(0.0),vec3<f32>(0.0),0.0,0.5,false);
+  var h=Hit(1e10,vec3<f32>(0.0),vec3<f32>(0.0),0.0,0.5,vec3<f32>(0.0),false);
   if(abs(direction.y)>0.000001) {
     let t=(-0.85-origin.y)/direction.y;
-    if(t>0.002) {h=Hit(t,vec3<f32>(0.0,1.0,0.0),p.ground.xyz,0.0,0.5,true);}
+    if(t>0.002) {h=Hit(t,vec3<f32>(0.0,1.0,0.0),p.ground.xyz,p.groundSurface.x,p.groundSurface.y,vec3<f32>(0.0),true);}
   }
   for(var i=0u;i<u32(p.misc.x);i++) {
     let s=spheres[i];let oc=origin-s.centerRadius.xyz;let b=dot(oc,direction);
@@ -29,7 +30,7 @@ fn intersect(origin:vec3<f32>,direction:vec3<f32>) -> Hit {
     if(discriminant>=0.0) {
       var t=-b-sqrt(discriminant);if(t<0.002) {t=-b+sqrt(discriminant);}
       if(t>0.002 && t<h.distance) {
-        h=Hit(t,normalize(origin+direction*t-s.centerRadius.xyz),s.colorMetal.xyz,s.colorMetal.w,s.surface.x,true);
+        h=Hit(t,normalize(origin+direction*t-s.centerRadius.xyz),s.colorMetal.xyz,s.colorMetal.w,s.surface.x,s.surface.yzw,true);
       }
     }
   }
@@ -52,6 +53,7 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>) {
         let t=clamp(direction.y*0.5+0.5,0.0,1.0);
         sum+=throughput*mix(p.skyBottom.xyz,p.skyTop.xyz,t);break;
       }
+      sum+=throughput*h.emission;
       origin=origin+direction*h.distance+h.normal*0.003;
       let light=normalize(normalize(vec3<f32>(-0.6,0.9,0.4))+randomUnit()*0.075);
       let cosine=max(0.0,dot(h.normal,light));

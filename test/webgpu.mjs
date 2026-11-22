@@ -17,8 +17,9 @@ try {
   await p.waitForFunction(()=>document.querySelector('#backend-tag')?.textContent==='WEBGPU');
   await p.selectOption('#resolution','256');await p.selectOption('#samples','32');
   await p.locator('#render-button').click();await p.waitForFunction(()=>document.querySelector('#render-status')?.textContent==='COMPLETE');
+  assert.equal(await p.locator('#backend-tag').textContent(),'WEBGPU','GPU backend must remain active after completion');
   const pixels=await p.locator('#render-canvas').evaluate(c=>Array.from(c.getContext('2d').getImageData(0,0,c.width,c.height).data));
-  const cpu=renderTileCPU(validateScene(PRESETS.solstice),{width:256,height:256,samples:32,bounces:4},{x:0,y:0,width:256,height:256});
+  const cpu=renderTileCPU(validateScene(PRESETS.orbit),{width:256,height:256,samples:32,bounces:4},{x:0,y:0,width:256,height:256});
   const error=pixels.reduce((sum,v,i)=>sum+Math.abs(v-cpu[i]),0)/pixels.length;
   assert.ok(error<5,`WebGPU/CPU mean pixel difference too large: ${error}`);
   assert.ok(new Set(pixels).size>100);assert.deepEqual(errors,[]);
@@ -35,6 +36,6 @@ try {
   await phone.locator('#device-name').fill('Audience phone');
   await phone.locator('#contribute-button').click();await phone.waitForFunction(()=>document.querySelector('#backend-tag')?.textContent==='WEBGPU');
   await phone.screenshot({path:new URL('phone-contributor.png',directory).pathname,fullPage:true});
-  const report={adapter,meanAbsolutePixelError:error,consoleErrors:errors};
+  const report={scene:'Orbit',sphereCount:PRESETS.orbit.spheres.length,adapter,meanAbsolutePixelError:error,consoleErrors:errors};
   await writeFile(new URL('webgpu-report.json',directory),JSON.stringify(report,null,2));console.log(report);
 } finally {await browser.close();}

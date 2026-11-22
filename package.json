@@ -9,9 +9,12 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server/index.js",
     "dev": "node --env-file-if-exists=.env --watch server/index.js",
+    "share": "node --env-file-if-exists=.env scripts/share.mjs",
     "test": "node --test test/*.test.js",
     "test:browser": "node test/browser.mjs",
     "test:webgpu": "node test/webgpu.mjs",
+    "test:demo": "node test/demo.mjs",
+    "test:controls": "node test/controls.mjs",
     "check": "node --check server/index.js && node --check server/coordinator.js && node --check public/app.js && node --check public/render-worker.js"
   },
   "dependencies": {

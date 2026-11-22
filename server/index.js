@@ -95,6 +95,7 @@ export function createApp({port=Number(process.env.PORT)||3210,host=process.env.
   const timer=setInterval(()=>{coordinator.tick();for(const room of coordinator.rooms.values()) if(room.clients.size) coordinator.broadcast(room);},500);timer.unref();
   const heartbeat=setInterval(()=>{for(const socket of wss.clients){if(!socket.alive){socket.terminate();continue;}socket.alive=false;socket.ping();}},10000);heartbeat.unref();
   return {server,coordinator,telemetry,
+    setPublicUrl:value=>{const url=new URL(value);if(url.protocol!=='https:')throw new Error('Public demo URL must use HTTPS.');publicUrl=url.origin;},
     listen:()=>new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,()=>{server.removeListener('error',reject);listeningPort=server.address().port;resolve(listeningPort);});}),
     close:async()=>{clearInterval(timer);clearInterval(heartbeat);for(const s of wss.clients)s.terminate();await new Promise(r=>server.close(r));await telemetry.close();}
   };

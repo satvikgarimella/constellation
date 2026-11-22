@@ -20,5 +20,5 @@ test('Gemini errors stay actionable without exposing the server key or upstream 
   await assert.rejects(()=>generateScene({apiKey:null}),/GEMINI_API_KEY/);
   await assert.rejects(()=>generateScene({prompt:'test',apiKey:'test-key',fetchImpl:async()=>new Response('sensitive upstream text',{status:429})}),/Gemini returned 429/);
   await assert.rejects(()=>generateScene({prompt:'test',apiKey:'test-key',fetchImpl:async()=>Response.json({candidates:[]})}),/did not return a scene/);
-  await assert.rejects(()=>generateScene({prompt:'test',apiKey:'test-key',fetchImpl:async()=>Response.json({candidates:[{content:{parts:[{text:'{"spheres":[]}'}]}}]})}),/1 and 12/);
+  await assert.rejects(()=>generateScene({prompt:'test',apiKey:'test-key',fetchImpl:async()=>Response.json({candidates:[{content:{parts:[{text:'{"spheres":[]}'}]}}]})}),/1 and 64/);
 });

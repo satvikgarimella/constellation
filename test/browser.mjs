@@ -14,7 +14,7 @@ try {
   const studio=await browser.newContext({viewport:{width:1440,height:1080}}),page=await studio.newPage();watch(page);
   await page.goto(`${base}/?cpu=1`);
   await page.waitForFunction(()=>document.querySelector('#connection')?.textContent==='Live connection');
-  const id=(await page.locator('#room-code').textContent()).trim();report.room=id;
+  const id=(await page.locator('#room-code').textContent()).trim();report.room=id;await page.locator('[data-preset=solstice]').click();
   await page.screenshot({path:new URL('studio-ready.png',directory).pathname,fullPage:true});
   await page.locator('#contribute-button').click();await page.waitForFunction(()=>document.querySelector('#backend-tag')?.textContent==='CPU WORKER');
   await page.selectOption('#resolution','256');await page.selectOption('#samples','8');await page.locator('#render-button').click();
@@ -49,11 +49,11 @@ try {
   await(await download).saveAs(new URL('render.png',directory).pathname);
   await page.locator('#share-button').click();assert.equal(await page.locator('#share-dialog').isVisible(),true);
   await page.locator('#share-dialog .dialog-close').click();
-  await page.selectOption('#resolution','1024');await page.selectOption('#samples','128');await page.locator('#render-button').click();
+  await page.selectOption('#resolution','512');await page.selectOption('#samples','64');await page.locator('#render-button').click();
   await until(async()=>{const s=await state(id);return s.run?.id===4&&s.clients.some(c=>c.label==='Audience phone'&&c.busy);});
   await mobile.close();
   complete=await until(async()=>{const s=await state(id);return s.run?.id===4&&s.run.status==='complete'&&s;},120000);
-  assert.ok(complete.run.retries>=1);assert.equal(complete.run.completed,1024);report.reassignment=complete.run.retries;
+  assert.ok(complete.run.retries>=1);assert.equal(complete.run.completed,256);report.reassignment=complete.run.retries;
   await page.locator('#contribute-button').click();
   // Exercise the normal GPU path independently of forced-CPU compatibility tests.
   const gpuContext=await browser.newContext({viewport:{width:1440,height:1080}}),gpuPage=await gpuContext.newPage();watch(gpuPage);
@@ -61,7 +61,7 @@ try {
   await gpuPage.locator('#contribute-button').click();
   await gpuPage.waitForFunction(()=>['WEBGPU','CPU WORKER'].includes(document.querySelector('#backend-tag')?.textContent));
   report.gpuBackend=await gpuPage.locator('#backend-tag').textContent();
-  const gpuRoom=(await gpuPage.locator('#room-code').textContent()).trim();
+  const gpuRoom=(await gpuPage.locator('#room-code').textContent()).trim();await gpuPage.locator('[data-preset=solstice]').click();
   await gpuPage.selectOption('#resolution','512');await gpuPage.selectOption('#samples','32');await gpuPage.locator('#render-button').click();
   const gpuRun=await until(async()=>{const s=await state(gpuRoom);return s.run?.status==='complete'&&s;});
   report.gpuRun=gpuRun.history[0];

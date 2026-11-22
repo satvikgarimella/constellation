@@ -67,3 +67,58 @@ test('late viewers receive all completed pixels and ownership without host privi
   assert.equal(s.messages.filter(m=>Buffer.isBuffer(m)).length,2);
   assert.equal(s.messages.find(m=>m.type==='tile-owners').owners.length,2);
 });
+
+test('explicit selection keeps ready outsiders waiting and produces a comparable solo/crowd pair',()=>{
+  const {c,r,host,peer,enable,finish}=setup();enable(host);enable(peer);
+  c.message(r,host,{type:'start',width:256,samples:8,workerIds:[peer.id]});
+  assert.equal(host.job,null);assert.ok(peer.job);
+  const newcomer=c.connect(r,socket(),{label:'Another phone'});enable(newcomer);assert.equal(newcomer.job,null);
+  while(r.run.status==='running') finish(peer);
+  assert.equal(r.history[0].workers,1);assert.equal(r.history[0].contributors[0].id,peer.id);
+  assert.deepEqual(r.history[0].workerIds,[peer.id]);
+  assert.equal(c.state(r).benchmark.reason,'solo_baseline');
+  c.message(r,host,{type:'start',width:256,samples:8,workerIds:[peer.id,newcomer.id]});
+  assert.equal(host.job,null);
+  while(r.run.status==='running') {if(peer.job)finish(peer);if(newcomer.job)finish(newcomer);}
+  const state=c.state(r);
+  assert.equal(state.benchmark.eligible,true);assert.equal(state.benchmark.baselineWorkerId,peer.id);
+  assert.equal(state.benchmark.baselineRunId,1);assert.equal(state.benchmark.crowdRunId,2);
+  assert.equal(state.benchmark.speedup,1,'equal elapsed times must report 1×, not invent speedup');
+  assert.equal(state.deviceCounts.ready,3);assert.equal(state.deviceCounts.eligible,2);assert.equal(state.deviceCounts.contributing,2);
+});
+
+test('invalid worker selection cannot accidentally launch a different set of devices',()=>{
+  const {c,r,host,peer,enable}=setup();enable(peer);
+  for(const workerIds of [[],[host.id],['unknown'],'all']) assert.throws(()=>c.message(r,host,{type:'start',workerIds}),/selected|Select/);
+  assert.equal(r.run,null);
+  c.message(r,host,{type:'start',workerIds:[peer.id,peer.id]});
+  assert.deepEqual(r.run.workerIds,[peer.id]);assert.equal(host.job,null);assert.ok(peer.job);
+});
+
+test('completed work counters use accepted pixels and samples, including retry details',()=>{
+  const {c,r,host,peer,enable,finish}=setup();enable(host);enable(peer);
+  c.start(r,{width:256,samples:32});finish(host);
+  const before=c.state(r);assert.equal(before.run.completedPixels,1024);assert.equal(before.run.pixelSamples,32768);
+  assert.equal(before.run.pixelSamplesPerSecond,3276800);assert.equal(before.run.startedAt,1000);
+  c.message(r,peer,{type:'contribute',enabled:false,reason:'page hidden'});
+  const after=c.state(r);assert.equal(after.run.retries,1);assert.equal(after.run.retryReasons['page hidden'],1);
+  assert.equal(after.run.lastReassignment.label,'Phone');assert.equal(after.run.lastReassignment.reason,'page hidden');
+  assert.equal(after.run.completedPixels,1024,'uncompleted/reassigned tiles do not increase throughput');
+  assert.equal(typeof r.events.find(e=>e.type==='tile_reassigned').time,'string');
+});
+
+test('backend changes are retained in completed history instead of mislabelling a fallback',()=>{
+  const {c,r,host,enable,finish}=setup();enable(host);c.message(r,host,{type:'contribute',enabled:true,backend:'webgpu'});
+  c.start(r,{width:256,samples:8});finish(host);
+  c.message(r,host,{type:'contribute',enabled:true,backend:'cpu'});
+  while(r.run.status==='running') finish(host);
+  assert.equal(r.history[0].backends,'cpu+webgpu');
+  assert.deepEqual(r.history[0].contributors[0].backends,['cpu','webgpu']);
+});
+
+test('showcase settings accept 2048 resolution and 512 samples while keeping bounded jobs',()=>{
+  const {c,r,peer,enable}=setup();enable(peer);
+  c.start(r,{width:2048,samples:512});
+  assert.equal(r.run.tiles.length,4096);assert.equal(peer.job.width,32);assert.equal(peer.job.height,32);
+  c.cancel(r);assert.throws(()=>c.start(r,{width:4096,samples:512}),/settings/);
+});

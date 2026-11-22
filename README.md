@@ -13,7 +13,7 @@ cd constellation-render
 node --env-file-if-exists=.env server/index.js
 ```
 
-Open **http://localhost:3210**. Click **Contribute compute**, then **Start render**. The server binds to your local network so another device can join using the QR code.
+Open **http://localhost:3210**. Click **Contribute compute**, choose **Quick check**, then **Start render**. The default **Orbit** scene contains 54 spheres: a chrome core, colored orbiting beads, emissive accents, and a reflective floor. Every visible result is calculated by the contributing browsers.
 
 For a fresh checkout, install first:
 
@@ -25,24 +25,48 @@ Or use `npm install` if pnpm/Corepack is unavailable. `npm start`, `npm test`, a
 
 If your shell's npm wrapper fails, use the direct Node start command above. It does not need npm once dependencies are installed.
 
-## First demo
+## Share an HTTPS demo with phones
 
-1. Open the studio on a laptop, contribute, and run **512 × 512 / 32 samples** solo. The completed run becomes a baseline.
-2. Select **Invite devices**. Scan the QR on two or more devices, name them, and opt in. Keep their pages visible.
-3. Repeat the **same scene and settings**. Toggle **Contribution map** to show who rendered each tile. The completed-run comparison uses actual elapsed time.
-4. Try **1024 × 1024 / 128 samples** for a longer live demo. While rendering, close one contributor's tab. Watch the reassignment count and remaining devices finish the image.
-5. Download the image using the arrow button above the canvas.
+The share launcher starts the app and a temporary Cloudflare Quick Tunnel. It prints an HTTPS address and updates the QR link automatically. No Cloudflare account or domain is needed. Install `cloudflared` on macOS with the [official installation instructions](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/):
 
-Use separate physical devices for a meaningful crowd benchmark. Two browser contexts on one computer test coordination but share hardware. Render speed is affected by scene geometry, temperature, device speed, network latency, and UI work. This project makes no claim to beat a dedicated desktop GPU.
+```sh
+brew install cloudflared
+```
+
+Stop any standalone app process using port 3210, then run from the project root:
+
+```sh
+node --env-file-if-exists=.env scripts/share.mjs
+# Equivalent: npm run share
+```
+
+Open the printed **Public studio** HTTPS link on the laptop to create the host room. Use that room's **Invite devices** QR on the phones. They only need internet access; they can use different Wi-Fi networks or cellular data. The host token belongs to the origin and tab where the room was created, so create the host room through the HTTPS link rather than opening an existing localhost room in another origin.
+
+Keep the share terminal and laptop running. **Ctrl-C stops both the app and tunnel.** The URL is temporary, changes on the next launch, and has no uptime guarantee. Anyone with the URL can reach the app. [Quick Tunnel documentation](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
+
+The launcher uses `CLOUDFLARED_BIN` when set, otherwise a local `.tools/cloudflared` binary when present, otherwise `cloudflared` on `PATH`. `.tools/` is gitignored. It uses its own empty tunnel configuration and saves the current address in `data/demo-url.json`; an old file does not mean its tunnel is still running.
+
+## First multi-device demo
+
+1. Open the HTTPS studio on the laptop and keep its contribution paused to use it as the controller. The host can still start renders.
+2. Select **Invite devices**. On two or more phones, scan the QR, choose distinct names, and tap **Contribute compute**. Keep their pages visible. Check the actual **WEBGPU** or **CPU WORKER** tag on each device.
+3. Choose **Orbit** and **Quick check** (**256 × 256 / 8 samples**), then **Start render**. Confirm the image reaches 100% and each participating worker completes tiles. Toggle **Contribution map** to see their work.
+4. Choose **Live demo** (**1024 × 1024 / 128 samples**). Under the image, choose a **Solo device** and click **Compare 1 vs crowd**. It runs the scene once on that device, then automatically repeats the same workload using the ready devices with the same renderer. Other devices wait during the solo run; the selected solo device also participates in the crowd run.
+5. Read the measured result below the image. The comparison reports slower results too. Repeat longer workloads for more useful timings; very short runs are dominated by overhead. Download the JSON benchmark report with the arrow beside the comparison button.
+6. For the recovery demo, start a separate longer render and close one contributor's tab while it has work. **Recovered tiles** should increase, and the remaining devices should finish the image. Use **Present** to enlarge the image for the audience; **Escape** restores the editing view.
+7. Download the rendered PNG with the arrow above the image. **Poster** selects **2048 × 2048 / 256 samples**, and the quality selector supports up to **512 samples** for a heavier workload.
+
+Use separate physical devices for a meaningful crowd benchmark. Several browser contexts on one computer test coordination but share hardware. Timings include networking and browser overhead; scene geometry, device speed, and temperature also affect results. More devices do not guarantee a speedup. The displayed throughput is completed pixel-samples per second, not a count of every secondary ray traced.
 
 ## GPU and phone access
 
 - The default renderer is **WebGPU**, with a WGSL compute shader that traces rays on the device's GPU.
-- WebGPU needs a secure context. `localhost` works for local development; phones joining `http://<LAN-IP>` use the **CPU Web Worker** fallback. Deploy with HTTPS to exercise supported phones' GPUs.
+- WebGPU needs a secure context. `localhost` works for local development; phones joining `http://<LAN-IP>` use the **CPU Web Worker** fallback. Use the HTTPS share launcher or an HTTPS deployment to exercise supported phones' GPUs.
 - Browsers and device capabilities differ. The interface reports the backend actually selected. Add `?cpu=1` to force the compatibility renderer for testing.
 - Contributions pause when the page is hidden, resume on return, and stop immediately when the user chooses Pause. A wake lock is requested where supported.
-- Some venue Wi-Fi networks isolate devices. Use a reachable HTTPS deployment or a shared hotspot if the local QR cannot connect.
-- If multiple LAN interfaces are present, set `PUBLIC_URL` to the reachable address before starting; this controls the QR link. Do not use `localhost` in links shared to phones.
+- Some venue Wi-Fi networks isolate devices. The public HTTPS link avoids the need for peer access on that Wi-Fi, but the laptop must remain connected to the internet.
+- For a permanent deployment, set `PUBLIC_URL` to its HTTPS address before starting. The temporary share launcher sets the address automatically. Do not use `localhost` in links shared to phones.
+- Physical-phone compatibility and real crowd speedup still need rehearsal on the actual devices. The automated browser tests use multiple contexts on one computer.
 
 ## Optional AI and telemetry
 
@@ -109,7 +133,7 @@ The host capability token stays in that browser tab's session storage and is not
 node --test test/*.test.js
 ```
 
-The suite covers deterministic tile assembly, valid scene bounds, binary framing, scheduling fairness, disconnects/timeouts, owner authorization, stale/duplicate results, cancelled runs, late-viewer replay, real HTTP/WebSocket rendering, JSONL events, database recovery, and Gemini response handling.
+The 22-test suite covers deterministic tile assembly, the Orbit scene and material bounds, binary framing, selected-worker scheduling, compatible benchmark eligibility, disconnects/timeouts, owner authorization, stale/duplicate results, cancelled runs, late-viewer replay, real HTTP/WebSocket rendering, JSONL events, database recovery, and Gemini response handling.
 
 Optional browser tests require Playwright and Chromium:
 
@@ -119,6 +143,8 @@ npx playwright install chromium
 # Start the app in another terminal first.
 node test/browser.mjs
 node test/webgpu.mjs
+node test/demo.mjs
+node test/controls.mjs
 ```
 
 `BASE_URL` overrides the default `http://localhost:3210`. If Playwright is provided by your environment, `PLAYWRIGHT_MODULE` can be the absolute path to its `index.mjs`. Screenshots, rendered PNGs, and reports are saved under `artifacts/` (gitignored).
@@ -129,17 +155,22 @@ The dedicated WebGPU test **requires** a GPU backend, validates shader execution
 
 ```sh
 GPU_ARGS='["--enable-unsafe-webgpu","--use-angle=metal"]' node test/webgpu.mjs
+GPU_ARGS='["--enable-unsafe-webgpu","--use-angle=metal"]' node test/demo.mjs
 ```
 
-These are test-browser flags, not instructions for audience phones. Normal visitors use their browser's supported default configuration.
+`test/demo.mjs` drives the real UI with a separate host and three WebGPU worker contexts. It checks the automatic solo/crowd comparison, benchmark export, a disconnected worker's tile recovery, a finished image, and the presentation/mobile layouts. All three workers share the test computer's GPU. This verifies the workflow and shader execution, not performance across three physical phones.
+
+`test/controls.mjs` checks that losing the solo worker cancels the comparison, the presentation Stop button remains usable when all workers pause, and the HTTPS invite QR loads correctly.
+
+These are test-browser flags, not instructions for audience phones. Normal visitors use their browser's supported default configuration. The test scripts can target the live HTTPS link through `BASE_URL`.
 
 ## Scope and next improvements
 
-- A render contains 1–12 spheres and a plane, up to 1024 × 1024 pixels and 128 samples. There are no mesh uploads, animations, transparent materials, or arbitrary jobs.
+- A render contains 1–64 spheres and a plane, up to 2048 × 2048 pixels and 512 samples. Materials include diffuse/metallic surfaces, bounded emission, and a reflective floor. There are no mesh uploads, animations, transparent materials, or arbitrary jobs.
 - It trusts the contents of accepted pixels. Lease validation prevents accidental duplicates and stale work; it does not prove computation was honest. No payments or rewards are involved.
 - Participant data is limited to chosen display names and computation metrics. Room IDs are shareable, so avoid sensitive content.
 - The room/client caps, bounded settings, origin checks, and payload limits suit a supervised demo. This is not a hardened public compute marketplace.
-- CPU and GPU implementations have small floating-point differences. A mixed-backend render can have slight differences in noise. Use matching backends for benchmark comparisons.
+- CPU and GPU implementations have small floating-point differences. A mixed-backend render can have slight differences in noise. **Compare 1 vs crowd** selects workers matching the solo device's renderer; the result also checks that the same baseline worker contributes to both completed runs.
 - The AI and database integrations need real credentials, and physical-phone/browser compatibility needs rehearsal on the actual devices.
 
 See `HACKATHON.md` for sponsor fit, the team split, and a three-minute demo script.

@@ -4,6 +4,27 @@ import { PRESETS, validateScene, createTiles } from '../public/scene.js';
 const COLORS = ['#e9a66a','#70c9b2','#88aef1','#c7a4e6','#e6cb77','#e78593','#8ed5df','#b4cd86'];
 const open = socket => socket.readyState === 1;
 const json = (socket, value) => { if(open(socket)) socket.send(JSON.stringify(value)); };
+const eligible = (run,client) => client.enabled && open(client.socket) && (!run?.workerIds || run.workerIds.includes(client.id));
+
+// A speed comparison is meaningful only when the solo worker also did work in
+// the crowd run, and both images used the same algorithm and render workload.
+export function benchmark(history) {
+  const crowd=history[0];
+  if(!crowd) return {eligible:false,reason:'no_completed_runs'};
+  const base={crowdRunId:crowd.runId,crowdSeconds:crowd.seconds};
+  if(crowd.workers===1) return {...base,eligible:false,reason:'solo_baseline',baselineRunId:crowd.runId,baselineSeconds:crowd.seconds,baselineWorkerId:crowd.contributors[0]?.id};
+  const renderers=record=>[...new Set(record.contributors.flatMap(c=>c.backends))];
+  const crowdBackends=renderers(crowd);
+  if(crowdBackends.length!==1) return {...base,eligible:false,reason:'mixed_backends'};
+  const matching=history.slice(1).filter(h=>h.workers===1 && h.fingerprint===crowd.fingerprint);
+  if(!matching.length) return {...base,eligible:false,reason:'matching_baseline_needed'};
+  const sameBackend=matching.filter(h=>renderers(h).length===1 && renderers(h)[0]===crowdBackends[0]);
+  if(!sameBackend.length) return {...base,eligible:false,reason:'backend_mismatch'};
+  const baseline=sameBackend.find(h=>crowd.contributors.some(c=>c.id===h.contributors[0].id));
+  if(!baseline) return {...base,eligible:false,reason:'baseline_worker_missing'};
+  if(baseline.seconds<=0 || crowd.seconds<=0) return {...base,eligible:false,reason:'insufficient_timing'};
+  return {...base,eligible:true,reason:'comparable',baselineRunId:baseline.runId,baselineSeconds:baseline.seconds,baselineWorkerId:baseline.contributors[0].id,baselineWorkerLabel:baseline.contributors[0].label,backend:crowdBackends[0],speedup:baseline.seconds/crowd.seconds};
+}
 
 export class Coordinator {
   constructor({ onEvent = () => {}, now = Date.now, leaseMs = 30000 } = {}) {
@@ -13,7 +34,7 @@ export class Coordinator {
     if(this.rooms.size >= 100) throw new Error('The studio is at capacity. Please try again later.');
     let id;
     do { id=randomBytes(3).toString('hex').toUpperCase(); } while(this.rooms.has(id));
-    const room={id, hostToken:randomBytes(24).toString('hex'), clients:new Map(), scene:structuredClone(PRESETS.solstice), run:null, sequence:0, leaseSequence:0, history:[], events:[], createdAt:this.now(), touchedAt:this.now()};
+    const room={id, hostToken:randomBytes(24).toString('hex'), clients:new Map(), scene:structuredClone(PRESETS.orbit||PRESETS.solstice), run:null, sequence:0, leaseSequence:0, history:[], events:[], createdAt:this.now(), touchedAt:this.now()};
     this.rooms.set(id,room);
     return room;
   }
@@ -63,19 +84,25 @@ export class Coordinator {
       this.cancel(room);
     } else if(msg.type==='ping') json(client.socket,{type:'pong'});
   }
-  start(room,{scene=room.scene,width=512,samples=32,bounces=4}={}) {
+  start(room,{scene=room.scene,width=512,samples=32,bounces=4,workerIds=null}={}) {
     if(room.run?.status==='running') throw new Error('Stop the current render before starting another.');
-    if(![256,512,768,1024].includes(width)||![8,16,32,64,128].includes(samples)||![2,3,4,5].includes(bounces)) throw new Error('Unsupported render settings.');
-    if(![...room.clients.values()].some(c=>c.enabled)) throw new Error('Connect at least one contributing device first.');
+    if(![256,512,768,1024,2048].includes(width)||![8,16,32,64,128,256,512].includes(samples)||![2,3,4,5].includes(bounces)) throw new Error('Unsupported render settings.');
+    if(workerIds!==null) {
+      if(!Array.isArray(workerIds)||!workerIds.length||workerIds.length>100||workerIds.some(id=>typeof id!=='string'||!room.clients.has(id))) throw new Error('Select at least one connected contributing device.');
+      workerIds=[...new Set(workerIds)];
+      if(workerIds.some(id=>!eligible(null,room.clients.get(id)))) throw new Error('Every selected device must opt in before starting.');
+    }
+    const initialWorkers=[...room.clients.values()].filter(c=>eligible({workerIds},c)).map(c=>({id:c.id,label:c.label,backend:c.backend}));
+    if(!initialWorkers.length) throw new Error('Connect at least one contributing device first.');
     const normalized=validateScene(scene),settings={width,height:width,samples,bounces};
     room.scene=normalized;
     const tiles=createTiles(width,width);
     // Interleave near and far tiles so the whole image appears early.
     const pending=tiles.map(t=>t.id).sort((a,b)=>((a*137)%tiles.length)-((b*137)%tiles.length));
     const fingerprint=createHash('sha256').update(JSON.stringify({scene:normalized,settings})).digest('hex');
-    room.run={id:++room.sequence,status:'running',scene:normalized,settings,tiles,pending,inflight:new Map(),results:new Map(),owners:new Map(),contributions:new Map(),fingerprint,startedAt:this.now(),finishedAt:null,retries:0};
+    room.run={id:++room.sequence,status:'running',scene:normalized,settings,workerIds,initialWorkers,tiles,pending,inflight:new Map(),results:new Map(),owners:new Map(),contributions:new Map(),fingerprint,startedAt:this.now(),finishedAt:null,retries:0,retryReasons:{},lastReassignment:null,completedPixels:0};
     for(const c of room.clients.values()) {c.job=null;c.tiles=0;c.pixels=0;c.durationMs=0;}
-    this.emit(room,'render_started',{runId:room.run.id,settings,scene:normalized.name});
+    this.emit(room,'render_started',{runId:room.run.id,settings,scene:normalized.name,workerIds,initialWorkers});
     this.broadcast(room);this.pump(room);
   }
   cancel(room) {
@@ -91,13 +118,17 @@ export class Coordinator {
     const assigned=run.inflight.get(job.id);
     if(assigned?.workerId!==client.id||assigned.lease!==job.lease) return;
     run.inflight.delete(job.id);run.pending.unshift(job.id);run.retries++;
-    this.emit(room,'tile_reassigned',{runId:run.id,tileId:job.id,workerId:client.id,reason});
+    const detail=String(reason||'paused').slice(0,80);
+    const category=['disconnected','timeout','page hidden'].includes(detail)?detail:'paused';
+    run.retryReasons[category]=(run.retryReasons[category]||0)+1;
+    run.lastReassignment={tileId:job.id,workerId:client.id,label:client.label,reason:detail,time:this.now()};
+    this.emit(room,'tile_reassigned',{runId:run.id,tileId:job.id,workerId:client.id,label:client.label,reason:detail});
   }
   pump(room) {
     const run=room.run;
     if(run?.status!=='running') return;
     for(const c of room.clients.values()) {
-      if(!c.enabled||c.job||!open(c.socket)||!run.pending.length) continue;
+      if(!eligible(run,c)||c.job||!run.pending.length) continue;
       const id=run.pending.shift();
       const job={...run.tiles[id],runId:run.id,lease:++room.leaseSequence};
       c.job=job;
@@ -116,17 +147,22 @@ export class Coordinator {
     run.inflight.delete(id);client.job=null;
     const stored=Buffer.from(data);run.results.set(id,stored);
     const pixels=tile.width*tile.height;
+    run.completedPixels+=pixels;
     client.tiles++;client.pixels+=pixels;client.durationMs+=durationMs;
-    const contribution=run.contributions.get(client.id)||{id:client.id,label:client.label,color:client.color,backend:client.backend,tiles:0};
-    contribution.tiles++;run.contributions.set(client.id,contribution);
+    const contribution=run.contributions.get(client.id)||{id:client.id,label:client.label,color:client.color,backend:client.backend,backends:[],tiles:0,pixels:0};
+    if(!contribution.backends.includes(client.backend)) contribution.backends.push(client.backend);
+    contribution.backends.sort();contribution.backend=contribution.backends.join('+');
+    contribution.tiles++;contribution.pixels+=pixels;run.contributions.set(client.id,contribution);
     this.emit(room,'tile_completed',{runId,tileId:id,workerId:client.id,backend:client.backend,durationMs:Math.round(durationMs),observedMs:this.now()-assigned.assignedAt,pixels,samples:run.settings.samples});
     const owner={tileId:id,workerId:client.id,color:client.color};run.owners.set(id,owner);
     for(const c of room.clients.values()) if(open(c.socket)) {json(c.socket,{type:'tile-owners',runId,owners:[owner]});c.socket.send(stored);}
     if(run.results.size===run.tiles.length) {
       run.status='complete';run.finishedAt=this.now();
       const duration=(run.finishedAt-run.startedAt)/1000;
-      const backends=[...new Set([...run.contributions.values()].map(c=>c.backend))].sort().join('+');
-      const record={runId:run.id,scene:run.scene.name,fingerprint:run.fingerprint,backends,width:run.settings.width,samples:run.settings.samples,seconds:duration,workers:run.contributions.size,tiles:run.tiles.length,retries:run.retries,finishedAt:run.finishedAt};
+      const contributors=[...run.contributions.values()].map(c=>({...c,backends:[...c.backends]}));
+      const backends=[...new Set(contributors.flatMap(c=>c.backends))].sort().join('+');
+      const pixelSamples=run.completedPixels*run.settings.samples;
+      const record={runId:run.id,scene:run.scene.name,fingerprint:run.fingerprint,backends,width:run.settings.width,samples:run.settings.samples,seconds:duration,workers:run.contributions.size,contributors,workerIds:run.workerIds,initialWorkers:run.initialWorkers,tiles:run.tiles.length,completedPixels:run.completedPixels,pixelSamples,pixelSamplesPerSecond:duration>0?pixelSamples/duration:0,retries:run.retries,retryReasons:run.retryReasons,startedAt:run.startedAt,finishedAt:run.finishedAt};
       room.history.unshift(record);room.history=room.history.slice(0,20);
       this.emit(room,'render_completed',record);this.broadcast(room);
     } else this.pump(room);
@@ -147,13 +183,16 @@ export class Coordinator {
   }
   state(room) {
     const run=room.run;
-    const elapsed=run?Math.max(0,((run.finishedAt||this.now())-run.startedAt)/1000):0;
+    const elapsed=run?Math.max(0,((run.finishedAt??this.now())-run.startedAt)/1000):0;
     const contributors=run?[...run.contributions.values()]:[];
+    const clients=[...room.clients.values()],pixelSamples=run?run.completedPixels*run.settings.samples:0;
     return {
       roomId:room.id,scene:room.scene,
-      clients:[...room.clients.values()].map(c=>({id:c.id,label:c.label,enabled:c.enabled,backend:c.backend,color:c.color,tiles:c.tiles,pixels:c.pixels,computeMs:c.durationMs,busy:!!c.job})),
-      run:run?{id:run.id,status:run.status,settings:run.settings,completed:run.results.size,total:run.tiles.length,inflight:run.inflight.size,retries:run.retries,elapsed,tilesPerSecond:elapsed>0?run.results.size/elapsed:0,contributors,fingerprint:run.fingerprint}:null,
+      clients:clients.map(c=>({id:c.id,label:c.label,enabled:c.enabled,backend:c.backend,color:c.color,tiles:c.tiles,pixels:c.pixels,computeMs:c.durationMs,busy:!!c.job,selected:eligible(run,c)})),
+      deviceCounts:{connected:clients.length,recruited:clients.filter(c=>c.backend).length,ready:clients.filter(c=>eligible(null,c)).length,eligible:clients.filter(c=>eligible(run,c)).length,contributing:contributors.length},
+      run:run?{id:run.id,status:run.status,settings:run.settings,workerIds:run.workerIds,selectionMode:run.workerIds?'selected':'open',initialWorkers:run.initialWorkers,completed:run.results.size,total:run.tiles.length,inflight:run.inflight.size,retries:run.retries,retryReasons:run.retryReasons,lastReassignment:run.lastReassignment,startedAt:run.startedAt,finishedAt:run.finishedAt,completedPixels:run.completedPixels,pixelSamples,pixelSamplesPerSecond:elapsed>0?pixelSamples/elapsed:0,elapsed,tilesPerSecond:elapsed>0?run.results.size/elapsed:0,contributors,fingerprint:run.fingerprint}:null,
       history:room.history,
+      benchmark:benchmark(room.history),
       events:room.events.filter(e=>e.type!=='tile_completed').slice(0,8)
     };
   }

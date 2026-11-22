@@ -18,7 +18,7 @@ function hitScene(origin, direction, scene, maxDistance = 1e10) {
     const t = (-0.85-origin[1])/direction[1];
     if(t > 0.002 && t < distance) {
       distance=t; normal=[0,1,0];
-      material={color:scene.ground,metal:0,roughness:0.5};
+      material={color:scene.ground,metal:scene.groundMetal??0,roughness:scene.groundRoughness??0.5};
     }
   }
   for(const sphere of scene.spheres) {
@@ -57,6 +57,9 @@ export function renderTileCPU(scene, settings, tile) {
           break;
         }
         const n=hit.normal,mat=hit.material;
+        // Emissive material contributes radiance when the path reaches it,
+        // including indirect paths through reflected geometry.
+        if(mat.emission)for(let c=0;c<3;c++)sum[c]+=throughput[c]*mat.emission[c];
         origin=add(add(origin,mul(direction,hit.distance)),mul(n,0.003));
         const light=norm(add(sunDirection,mul(unit(),0.075)));
         const cosine=Math.max(0,dot(n,light));

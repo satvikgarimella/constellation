@@ -15,6 +15,11 @@
     "test:webgpu": "node test/webgpu.mjs",
     "test:demo": "node test/demo.mjs",
     "test:controls": "node test/controls.mjs",
+    "test:batching": "node test/batching.mjs",
+    "test:network": "node test/network-batching.mjs",
+    "test:phones": "node scripts/phone-test.mjs",
+    "verify:services": "node --env-file-if-exists=.env scripts/verify-services.mjs",
+    "verify:deployment": "node scripts/verify-deployment.mjs",
     "check": "node --check server/index.js && node --check server/coordinator.js && node --check public/app.js && node --check public/render-worker.js"
   },
   "dependencies": {

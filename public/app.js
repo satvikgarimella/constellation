@@ -7,6 +7,10 @@ const arrow='<svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4
 let roomId,token,state,config,ws,clientId,isHost=false,worker=null,backend=null,contributing=false,wantsToContribute=false,currentJob=null,connected=false,currentRunId=null,roomScene=null,selectedPreset='orbit',joinURL='',reconnectTimer,toastTimer,wakeLock=null,initialized=false;
 let chart=[],lastChartTime=0,owners=new Map(),receivedTiles=new Set(),metricsFetchedAt=0;
 let comparison=null,baselineDevice='',rendererReason='',generating=false,lastRecoveryKey='';
+let jobQueue=[];
+// Small batches amortize network round trips. Keep one GPU operation in flight
+// because the renderer reuses its uniform, output, and readback buffers.
+const batchSize=new URLSearchParams(location.search).get('batch')==='1'?1:4;
 const joinView=location.pathname.startsWith('/join/');
 const forceCPU=new URLSearchParams(location.search).get('cpu')==='1';
 let deviceName=localStorage.getItem('constellation-device')||(/iPhone/.test(navigator.userAgent)?'iPhone':/iPad/.test(navigator.userAgent)?'iPad':/Android/.test(navigator.userAgent)?'Android phone':/Mac/.test(navigator.userAgent)?'Mac browser':'Browser device');
@@ -88,9 +92,10 @@ function connect() {
       currentRunId=null;update(msg.state);
       if(wantsToContribute&&!document.hidden) beginContribution();
     } else if(msg.type==='state')update(msg.state);
-    else if(msg.type==='job') {
+    else if(msg.type==='job'||msg.type==='jobs') {
       if(!contributing||!worker){send({type:'contribute',enabled:false});return;}
-      currentJob=msg.job;worker.postMessage({type:'render',job:msg.job,scene:msg.scene,settings:msg.settings});
+      for(const job of msg.jobs||[msg.job])jobQueue.push({job,scene:msg.scene,settings:msg.settings});
+      renderNextJob();
     } else if(msg.type==='cancel') {currentJob=null;restartWorker();}
     else if(msg.type==='tile-owners'&&msg.runId===currentRunId){for(const owner of msg.owners)owners.set(owner.tileId,owner);drawOwners(msg.owners);}
     else if(msg.type==='paused'){stopContribution();toast(msg.reason);}
@@ -105,29 +110,37 @@ function connect() {
 }
 function connectionUI() {const el=$('#connection');if(!el)return;el.innerHTML=`<i></i>${connected?'Live connection':'Reconnecting…'}`;el.classList.toggle('online',connected);}
 
+function renderNextJob(){
+  if(currentJob||!contributing||!worker||!connected)return;
+  const next=jobQueue.shift();if(!next)return;
+  currentJob=next.job;worker.postMessage({type:'render',...next});
+}
+
 async function beginContribution() {
   if(worker||!connected)return;
   wantsToContribute=true;
   deviceName=$('#device-name').value.trim().slice(0,40)||'Browser device';localStorage.setItem('constellation-device',deviceName);
   $('#contribute-button').disabled=true;$('#contribute-button').textContent='Preparing renderer…';
-  worker=new Worker('/render-worker.js',{type:'module'});
-  worker.onmessage=({data})=>{
+  const activeWorker=new Worker('/render-worker.js',{type:'module'});worker=activeWorker;
+  activeWorker.onmessage=({data})=>{
+    if(worker!==activeWorker)return;
     if(data.type==='ready') {
       if(!wantsToContribute)return;
       backend=data.backend;rendererReason=data.reason||rendererReason;contributing=true;
-      send({type:'contribute',enabled:true,backend,label:deviceName});contributionUI();
+      send({type:'contribute',enabled:true,backend,label:deviceName,batchSize});contributionUI();
       if(navigator.wakeLock&&!document.hidden) navigator.wakeLock.request('screen').then(lock=>{wakeLock=lock;}).catch(()=>{});
     } else if(data.type==='result') {
-      if(contributing&&currentJob?.lease===data.job.lease&&ws.readyState===WebSocket.OPEN) ws.send(packResult(data.job,data.pixels,data.durationMs));
-      currentJob=null;
-    } else if(data.type==='backend') {backend=data.backend;send({type:'contribute',enabled:true,backend,label:deviceName});contributionUI();toast(data.reason);}
+      if(currentJob?.runId!==data.job.runId||currentJob?.id!==data.job.id||currentJob?.lease!==data.job.lease)return;
+      if(contributing&&ws.readyState===WebSocket.OPEN) ws.send(packResult(data.job,data.pixels,data.durationMs));
+      currentJob=null;renderNextJob();
+    } else if(data.type==='backend') {backend=data.backend;send({type:'contribute',enabled:true,backend,label:deviceName,batchSize});contributionUI();toast(data.reason);}
     else if(data.type==='notice'){rendererReason=data.message;console.info(data.message);}
     else if(data.type==='error') {toast(data.message);stopContribution();}
   };
-  worker.onerror=event=>{toast(`Renderer stopped: ${event.message}`);stopContribution();};
-  worker.postMessage({type:'init',forceCPU});
+  activeWorker.onerror=event=>{if(worker!==activeWorker)return;toast(`Renderer stopped: ${event.message}`);stopContribution();};
+  activeWorker.postMessage({type:'init',forceCPU});
 }
-function pauseWorker(){worker?.terminate();worker=null;contributing=false;currentJob=null;wakeLock?.release().catch(()=>{});wakeLock=null;contributionUI();}
+function pauseWorker(){worker?.terminate();worker=null;contributing=false;currentJob=null;jobQueue=[];wakeLock?.release().catch(()=>{});wakeLock=null;contributionUI();}
 function stopContribution(){wantsToContribute=false;send({type:'contribute',enabled:false,reason:'paused'});pauseWorker();}
 function restartWorker(){const wanted=wantsToContribute;pauseWorker();if(wanted&&!document.hidden)beginContribution();}
 function contributionUI() {
@@ -215,7 +228,7 @@ function update(next) {
   $('#canvas-details').textContent=run?`${run.settings.width} × ${run.settings.height} · ${run.settings.samples} SAMPLES · ${run.settings.bounces} BOUNCES`:'PATH TRACED · 32 × 32 TILES';
   $('#render-button').disabled=running||!!comparison||generating||!active.length||!isHost||!connected;
   $('#render-button').classList.toggle('hidden',running);$('#stop-button').classList.toggle('hidden',!running||!isHost);
-  $('#render-hint').textContent=!isHost?'Only the room owner can start a render.':running?'Each device receives one tile at a time.':!active.length?'Connect a contributing device to begin.':'All connected devices will share the work.';
+  $('#render-hint').textContent=!isHost?'Only the room owner can start a render.':running?'Devices render small batches of tiles.':!active.length?'Connect a contributing device to begin.':'All connected devices will share the work.';
   $('#resolution').disabled=$('#samples').disabled=running||!!comparison||generating||!isHost;
   document.querySelectorAll('[data-workload]').forEach(b=>b.disabled=running||!!comparison||generating||!isHost);
   $('#generate-button').disabled=!config.gemini||running||!!comparison||generating||!isHost;

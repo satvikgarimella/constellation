@@ -58,6 +58,8 @@ The launcher uses `CLOUDFLARED_BIN` when set, otherwise a local `.tools/cloudfla
 
 Use separate physical devices for a meaningful crowd benchmark. Several browser contexts on one computer test coordination but share hardware. Timings include networking and browser overhead; scene geometry, device speed, and temperature also affect results. More devices do not guarantee a speedup. The displayed throughput is completed pixel-samples per second, not a count of every secondary ray traced.
 
+For an operator-controlled rehearsal, run `node scripts/phone-test.mjs https://YOUR-DEMO-ORIGIN`. It prints a fresh join link, waits for two opt-in participants, renders a quick shared image, then runs three matching solo/crowd pairs. Keep both pages open. It writes `artifacts/phone-test-report.json`; paused/disconnected devices, mixed renderers, and incomplete tests are reported rather than counted as passes. The operator must confirm that the participants really are on separate physical phones. The controller itself does no rendering.
+
 ## GPU and phone access
 
 - The default renderer is **WebGPU**, with a WGSL compute shader that traces rays on the device's GPU.
@@ -71,6 +73,14 @@ Use separate physical devices for a meaningful crowd benchmark. Several browser 
 ## Optional AI and telemetry
 
 Copy `.env.example` to `.env`, fill the desired values, then restart the server. Never put API keys in frontend files or commit `.env`.
+
+See [SETUP.md](SETUP.md) for the account links, free options, and where to copy each value. After saving the credentials, verify real service calls:
+
+```sh
+node --env-file-if-exists=.env scripts/verify-services.mjs
+```
+
+Use `--gemini` or `--database` to check only one. The verifier saves sanitized results in `artifacts/service-verification.json` and exits unsuccessfully for missing credentials or failed requests. It makes a real Gemini request and writes/reads one tagged synthetic database event; that row remains in the database. A passing database check establishes PostgreSQL functionality, not the identity of its hosting provider.
 
 ### Gemini scene generation
 
@@ -93,6 +103,8 @@ No hosted database is connected in this checkout. Recovery behavior is tested wi
 ## Deploy on a VM with HTTPS
 
 `Dockerfile` and `deploy/` provide a single Node coordinator behind Caddy. The same setup can be deployed on Vultr or another Docker-capable VM. Docker is not installed in the development environment, so these deployment files have not been built or deployed here.
+
+The full [Vultr deployment guide](deploy/DEPLOYMENT.md) includes sizing, source pinning, verification, updates, and rollback. Verify a deployed origin with `BASE_URL=https://YOUR-DOMAIN MATCH_LOCAL_ASSETS=1 node scripts/verify-deployment.mjs`. Its HTTPS/WebSocket checks do not substitute for rendering on the actual phones or calling the sponsor services.
 
 1. Point a domain's DNS record at the VM. Allow inbound TCP 80 and 443 (UDP 443 optional).
 2. Copy this project to the VM. Create `.env` from `.env.example`; add `DOMAIN=render.your-domain.com` and optional service credentials.
@@ -123,7 +135,7 @@ Phone / laptop ◄── tile + scene + lease ────┤
 
 `public/scene.js` defines scene validation, deterministic per-pixel seeding, tiles, and the result protocol. `public/raytracer.js` and `public/trace.wgsl` implement the same rendering algorithm. `public/render-worker.js` chooses the backend. `server/coordinator.js` owns all scheduling; the server never calculates the rendered pixels.
 
-Each worker receives one tile at a time. Faster workers naturally request more. Jobs have a worker identity, run ID, and unique lease. A pause, disconnect, or 30-second deadline returns unfinished work to the queue. Stale, duplicate, malformed, or wrong-worker result frames are rejected. Late viewers receive the cached image and contribution map.
+Each browser opts into batches of up to four tiles, sharing the scene once per batch to reduce network round trips. It renders those tiles sequentially and returns each result immediately. A drained batch gets more work, so faster workers naturally receive more. Older clients keep single-tile behavior; append `?batch=1` to a joining browser URL to measure that mode. Jobs have a worker identity, run ID, and unique lease. A pause, disconnect, or 30-second period without accepted progress releases every unfinished tile in the batch. Stale, duplicate, malformed, or wrong-worker result frames are rejected. Late viewers receive the cached image and contribution map.
 
 The host capability token stays in that browser tab's session storage and is not included in shared URLs. Keep that tab for the demo; opening only the room URL in a different browser gives viewing and contributing access, not host controls.
 
@@ -133,7 +145,7 @@ The host capability token stays in that browser tab's session storage and is not
 node --test test/*.test.js
 ```
 
-The 22-test suite covers deterministic tile assembly, the Orbit scene and material bounds, binary framing, selected-worker scheduling, compatible benchmark eligibility, disconnects/timeouts, owner authorization, stale/duplicate results, cancelled runs, late-viewer replay, real HTTP/WebSocket rendering, JSONL events, database recovery, and Gemini response handling.
+The automated suite covers deterministic tile assembly, the Orbit scene and material bounds, binary framing, bounded batch scheduling and reassignments, selected-worker scheduling, compatible benchmark eligibility, disconnects/timeouts, owner authorization, stale/duplicate results, cancelled runs, late-viewer replay, real HTTP/WebSocket rendering, JSONL events, database recovery, and Gemini response handling. Service adapter unit tests use simulated responses; the live-service verifier is a separate check.
 
 Optional browser tests require Playwright and Chromium:
 
@@ -145,6 +157,8 @@ node test/browser.mjs
 node test/webgpu.mjs
 node test/demo.mjs
 node test/controls.mjs
+node test/batching.mjs
+node test/network-batching.mjs
 ```
 
 `BASE_URL` overrides the default `http://localhost:3210`. If Playwright is provided by your environment, `PLAYWRIGHT_MODULE` can be the absolute path to its `index.mjs`. Screenshots, rendered PNGs, and reports are saved under `artifacts/` (gitignored).
@@ -161,6 +175,8 @@ GPU_ARGS='["--enable-unsafe-webgpu","--use-angle=metal"]' node test/demo.mjs
 `test/demo.mjs` drives the real UI with a separate host and three WebGPU worker contexts. It checks the automatic solo/crowd comparison, benchmark export, a disconnected worker's tile recovery, a finished image, and the presentation/mobile layouts. All three workers share the test computer's GPU. This verifies the workflow and shader execution, not performance across three physical phones.
 
 `test/controls.mjs` checks that losing the solo worker cancels the comparison, the presentation Stop button remains usable when all workers pause, and the HTTPS invite QR loads correctly.
+
+`test/batching.mjs` checks real sequential GPU dispatch, bounded batches, pause/resume and cancellation with queued work, and image equality with single-tile rendering. `test/network-batching.mjs` uses a local WebSocket delay proxy and alternating single-tile/batched runs to measure network overhead. It defaults to `UPSTREAM_URL=http://127.0.0.1:3211` and adds 40 ms in each direction; set `UPSTREAM_URL` to your local test server. This is a controlled latency experiment on one GPU, not a physical-phone benchmark. Run GPU timing checks separately from other rendering tests.
 
 These are test-browser flags, not instructions for audience phones. Normal visitors use their browser's supported default configuration. The test scripts can target the live HTTPS link through `BASE_URL`.
 

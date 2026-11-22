@@ -2,6 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { PRESETS, validateScene, createTiles } from '../public/scene.js';
 
 const COLORS = ['#e9a66a','#70c9b2','#88aef1','#c7a4e6','#e6cb77','#e78593','#8ed5df','#b4cd86'];
+const MAX_BATCH_SIZE = 4;
 const open = socket => socket.readyState === 1;
 const json = (socket, value) => { if(open(socket)) socket.send(JSON.stringify(value)); };
 const eligible = (run,client) => client.enabled && open(client.socket) && (!run?.workerIds || run.workerIds.includes(client.id));
@@ -47,7 +48,7 @@ export class Coordinator {
   }
   connect(room,socket,{token,label}={}) {
     const id=randomBytes(5).toString('hex');
-    const client={id,socket,label:String(label||'New device').slice(0,40),host:token===room.hostToken,enabled:false,backend:null,job:null,tiles:0,pixels:0,durationMs:0,joinedAt:this.now(),color:COLORS[room.clients.size%COLORS.length]};
+    const client={id,socket,label:String(label||'New device').slice(0,40),host:token===room.hostToken,enabled:false,backend:null,batchSize:1,jobs:new Map(),job:null,tiles:0,pixels:0,durationMs:0,joinedAt:this.now(),color:COLORS[room.clients.size%COLORS.length]};
     room.clients.set(id,client);room.touchedAt=this.now();
     json(socket,{type:'welcome',clientId:id,isHost:client.host,state:this.state(room)});
     if(room.run) {
@@ -72,6 +73,7 @@ export class Coordinator {
       if(msg.enabled) {
         if(!['webgpu','cpu'].includes(msg.backend)) throw new Error('Unknown renderer.');
         const was=client.enabled;
+        client.batchSize=Number.isFinite(msg.batchSize)&&msg.batchSize>=1?Math.min(MAX_BATCH_SIZE,Math.floor(msg.batchSize)):1;
         client.enabled=true;client.backend=msg.backend;
         if(!was) this.emit(room,'device_joined',{workerId:client.id,label:client.label,backend:client.backend});
       } else { client.enabled=false;this.release(room,client,msg.reason||'paused'); }
@@ -101,39 +103,47 @@ export class Coordinator {
     const pending=tiles.map(t=>t.id).sort((a,b)=>((a*137)%tiles.length)-((b*137)%tiles.length));
     const fingerprint=createHash('sha256').update(JSON.stringify({scene:normalized,settings})).digest('hex');
     room.run={id:++room.sequence,status:'running',scene:normalized,settings,workerIds,initialWorkers,tiles,pending,inflight:new Map(),results:new Map(),owners:new Map(),contributions:new Map(),fingerprint,startedAt:this.now(),finishedAt:null,retries:0,retryReasons:{},lastReassignment:null,completedPixels:0};
-    for(const c of room.clients.values()) {c.job=null;c.tiles=0;c.pixels=0;c.durationMs=0;}
+    for(const c of room.clients.values()) {c.jobs.clear();c.job=null;c.tiles=0;c.pixels=0;c.durationMs=0;}
     this.emit(room,'render_started',{runId:room.run.id,settings,scene:normalized.name,workerIds,initialWorkers});
     this.broadcast(room);this.pump(room);
   }
   cancel(room) {
     if(room.run?.status!=='running') return;
     room.run.status='cancelled';room.run.finishedAt=this.now();room.run.inflight.clear();
-    for(const c of room.clients.values()) {c.job=null;json(c.socket,{type:'cancel',runId:room.run.id});}
+    for(const c of room.clients.values()) {c.jobs.clear();c.job=null;json(c.socket,{type:'cancel',runId:room.run.id});}
     this.emit(room,'render_cancelled',{runId:room.run.id});this.broadcast(room);
   }
   release(room,client,reason) {
-    const run=room.run,job=client.job;
-    client.job=null;
-    if(!job||run?.status!=='running'||job.runId!==run.id) return;
-    const assigned=run.inflight.get(job.id);
-    if(assigned?.workerId!==client.id||assigned.lease!==job.lease) return;
-    run.inflight.delete(job.id);run.pending.unshift(job.id);run.retries++;
+    const run=room.run,jobs=[...client.jobs.values()];
+    client.jobs.clear();client.job=null;
+    if(run?.status!=='running') return;
     const detail=String(reason||'paused').slice(0,80);
     const category=['disconnected','timeout','page hidden'].includes(detail)?detail:'paused';
-    run.retryReasons[category]=(run.retryReasons[category]||0)+1;
-    run.lastReassignment={tileId:job.id,workerId:client.id,label:client.label,reason:detail,time:this.now()};
-    this.emit(room,'tile_reassigned',{runId:run.id,tileId:job.id,workerId:client.id,label:client.label,reason:detail});
+    const released=[];
+    for(const job of jobs) {
+      const assigned=run.inflight.get(job.id);
+      if(job.runId!==run.id||assigned?.workerId!==client.id||assigned.lease!==job.lease) continue;
+      run.inflight.delete(job.id);released.push(job.id);run.retries++;
+      run.retryReasons[category]=(run.retryReasons[category]||0)+1;
+      run.lastReassignment={tileId:job.id,workerId:client.id,label:client.label,reason:detail,time:this.now()};
+      this.emit(room,'tile_reassigned',{runId:run.id,tileId:job.id,workerId:client.id,label:client.label,reason:detail});
+    }
+    run.pending.unshift(...released);
   }
   pump(room) {
     const run=room.run;
     if(run?.status!=='running') return;
     for(const c of room.clients.values()) {
-      if(!eligible(run,c)||c.job||!run.pending.length) continue;
-      const id=run.pending.shift();
-      const job={...run.tiles[id],runId:run.id,lease:++room.leaseSequence};
-      c.job=job;
-      run.inflight.set(id,{workerId:c.id,lease:job.lease,assignedAt:this.now(),expiresAt:this.now()+this.leaseMs});
-      json(c.socket,{type:'job',job,scene:run.scene,settings:run.settings});
+      if(!eligible(run,c)||c.jobs.size||!run.pending.length) continue;
+      const jobs=[],assignedAt=this.now();
+      while(jobs.length<c.batchSize&&run.pending.length) {
+        const id=run.pending.shift();
+        const job={...run.tiles[id],runId:run.id,lease:++room.leaseSequence};
+        c.jobs.set(id,job);jobs.push(job);
+        run.inflight.set(id,{workerId:c.id,lease:job.lease,assignedAt,expiresAt:assignedAt+this.leaseMs});
+      }
+      c.job=jobs[0];
+      json(c.socket,{...(c.batchSize>1?{type:'jobs',jobs}:{type:'job',job:c.job}),scene:run.scene,settings:run.settings});
     }
   }
   result(room,client,bytes) {
@@ -142,9 +152,12 @@ export class Coordinator {
     const view=new DataView(data.buffer,data.byteOffset,data.byteLength);
     const runId=view.getUint32(0,true),id=view.getUint32(4,true),lease=view.getUint32(8,true),durationMs=view.getFloat32(12,true);
     const run=room.run,assigned=run?.inflight.get(id),tile=run?.tiles[id];
-    if(run?.status!=='running'||run.id!==runId||!tile||assigned?.workerId!==client.id||assigned.lease!==lease||client.job?.lease!==lease) return false;
+    if(run?.status!=='running'||run.id!==runId||!tile||assigned?.workerId!==client.id||assigned.lease!==lease||client.jobs.get(id)?.lease!==lease) return false;
     if(data.byteLength!==16+tile.width*tile.height*4||!Number.isFinite(durationMs)||durationMs<0) return false;
-    run.inflight.delete(id);client.job=null;
+    run.inflight.delete(id);client.jobs.delete(id);client.job=client.jobs.values().next().value??null;
+    // Batches render sequentially. Progress renews the remaining leases so the
+    // timeout measures a stalled worker, not the total time of all queued tiles.
+    for(const job of client.jobs.values()) run.inflight.get(job.id).expiresAt=this.now()+this.leaseMs;
     const stored=Buffer.from(data);run.results.set(id,stored);
     const pixels=tile.width*tile.height;
     run.completedPixels+=pixels;
@@ -172,9 +185,10 @@ export class Coordinator {
     for(const room of this.rooms.values()) {
       const run=room.run;
       if(run?.status==='running') {
-        for(const assigned of [...run.inflight.values()]) if(assigned.expiresAt<this.now()) {
-          const client=room.clients.get(assigned.workerId);
-          if(client) {client.enabled=false;this.release(room,client,'timeout');json(client.socket,{type:'paused',reason:'Your last tile timed out. Rejoin to try again.'});}
+        const expiredWorkers=new Set([...run.inflight.values()].filter(assigned=>assigned.expiresAt<this.now()).map(assigned=>assigned.workerId));
+        for(const workerId of expiredWorkers) {
+          const client=room.clients.get(workerId);
+          if(client) {client.enabled=false;this.release(room,client,'timeout');json(client.socket,{type:'paused',reason:'Your worker stopped completing tiles. Rejoin to try again.'});}
         }
         this.pump(room);
       }
@@ -188,7 +202,7 @@ export class Coordinator {
     const clients=[...room.clients.values()],pixelSamples=run?run.completedPixels*run.settings.samples:0;
     return {
       roomId:room.id,scene:room.scene,
-      clients:clients.map(c=>({id:c.id,label:c.label,enabled:c.enabled,backend:c.backend,color:c.color,tiles:c.tiles,pixels:c.pixels,computeMs:c.durationMs,busy:!!c.job,selected:eligible(run,c)})),
+      clients:clients.map(c=>({id:c.id,label:c.label,enabled:c.enabled,backend:c.backend,color:c.color,tiles:c.tiles,pixels:c.pixels,computeMs:c.durationMs,busy:!!c.job,batchSize:c.batchSize,inflight:c.jobs.size,selected:eligible(run,c)})),
       deviceCounts:{connected:clients.length,recruited:clients.filter(c=>c.backend).length,ready:clients.filter(c=>eligible(null,c)).length,eligible:clients.filter(c=>eligible(run,c)).length,contributing:contributors.length},
       run:run?{id:run.id,status:run.status,settings:run.settings,workerIds:run.workerIds,selectionMode:run.workerIds?'selected':'open',initialWorkers:run.initialWorkers,completed:run.results.size,total:run.tiles.length,inflight:run.inflight.size,retries:run.retries,retryReasons:run.retryReasons,lastReassignment:run.lastReassignment,startedAt:run.startedAt,finishedAt:run.finishedAt,completedPixels:run.completedPixels,pixelSamples,pixelSamplesPerSecond:elapsed>0?pixelSamples/elapsed:0,elapsed,tilesPerSecond:elapsed>0?run.results.size/elapsed:0,contributors,fingerprint:run.fingerprint}:null,
       history:room.history,

@@ -40,7 +40,7 @@ node --env-file-if-exists=.env scripts/share.mjs
 # Equivalent: npm run share
 ```
 
-Open the printed **Public studio** HTTPS link on the laptop to create the host room. Use that room's **Invite devices** QR on the phones. They only need internet access; they can use different Wi-Fi networks or cellular data. The host token belongs to the origin and tab where the room was created, so create the host room through the HTTPS link rather than opening an existing localhost room in another origin.
+Open the printed **Public studio** HTTPS link on the laptop to create the host room. Use that room's **Invite devices** QR on the phones. They only need internet access; they can use different Wi-Fi networks or cellular data. Keep the original host tab open: its access is stored in that tab's session storage for the site address where you created the room. `/r/ROOM_CODE` opens the studio; `/join/ROOM_CODE` opens the contributor page. If the original host tab reaches a contributor page, choose **Open host controls** to return to the studio. Opening the room link in a new tab or browser does not by itself grant ownership.
 
 Keep the share terminal and laptop running. **Ctrl-C stops both the app and tunnel.** The URL is temporary, changes on the next launch, and has no uptime guarantee. Anyone with the URL can reach the app. [Quick Tunnel documentation](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
 
@@ -143,7 +143,7 @@ Phone / laptop ◄── tile + scene + lease ────┤
 
 Each browser opts into batches of up to four tiles, sharing the scene once per batch to reduce network round trips. It renders those tiles sequentially and returns each result immediately. A drained batch gets more work, so faster workers naturally receive more. Older clients keep single-tile behavior; append `?batch=1` to a joining browser URL to measure that mode. Jobs have a worker identity, run ID, and unique lease. A pause, disconnect, or 30-second period without accepted progress releases every unfinished tile in the batch. Stale, duplicate, malformed, or wrong-worker result frames are rejected. Late viewers receive the cached image and contribution map.
 
-The host capability token stays in that browser tab's session storage and is not included in shared URLs. Keep that tab for the demo; opening only the room URL in a different browser gives viewing and contributing access, not host controls.
+The host capability token stays in the creating tab's session storage and is not included in URLs or invitations. The server verifies it for every connection. Reloading that tab or navigating between `/r/ROOM_CODE` and `/join/ROOM_CODE` on the same site preserves its host access. The contributor page shows **Open host controls** only after the server recognizes that host; other participants see **Watch the full studio**. A studio URL alone provides viewing and contributing access, so keep the original host tab for the demo.
 
 ## Tests
 

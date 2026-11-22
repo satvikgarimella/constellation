@@ -19,6 +19,7 @@
     "test:network": "node test/network-batching.mjs",
     "test:load": "node test/load.mjs",
     "test:services-live": "node test/services-live.mjs",
+    "test:database-live": "node test/services-database-live.mjs",
     "test:phones": "node scripts/phone-test.mjs",
     "verify:services": "node --env-file-if-exists=.env scripts/verify-services.mjs",
     "verify:deployment": "node scripts/verify-deployment.mjs",

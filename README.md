@@ -86,6 +86,8 @@ Use `--gemini` or `--database` to check only one. The verifier saves sanitized r
 
 For the complete Gemini UI path, start the configured app and run `node test/services-live.mjs` with the same Playwright/WebGPU settings as the browser tests below. This opt-in test makes up to two real generation requests, validates the generated scene, renders it on WebGPU, compares the pixels with the CPU reference, and saves `artifacts/gemini-ui-report.json` plus a screenshot. It does not claim database verification.
 
+For the database UI path, wait until `/api/config` reports `databaseReady: true`, then run `BASE_URL=https://YOUR-DEMO-ORIGIN node test/services-database-live.mjs` with the same Playwright/WebGPU settings. This opt-in test creates a fresh room, renders 64 real GPU tiles, and checks that the database metrics return exactly 64 tiles and 65,536 pixels for the actual contributor. It saves `artifacts/database-ui-report.json` and a screenshot, and leaves the test room's telemetry in the configured database. It makes no Gemini requests and does not establish physical-phone performance.
+
 ### Gemini scene generation
 
 Set `GEMINI_API_KEY`. The host can describe a composition; Gemini returns structured JSON containing geometry, materials, camera, and lighting. The server bounds and validates it before sending it to the renderers. The model does not return executable JavaScript or WGSL.
@@ -102,7 +104,7 @@ Events include server timestamps, room/run/worker IDs, accepted tiles, observed 
 
 Local telemetry is always written to `data/events.jsonl`. Database writes are batched; unavailable databases are retried. The in-memory retry queue is bounded at 10,000 events, while the JSONL remains the complete local log. Database writes are best effort: an uncertain connection failure can produce duplicate analytics records; billing or verified credit accounting is outside scope.
 
-No hosted database is connected in this checkout. Recovery behavior is tested with a simulated connection.
+No database credentials are bundled. Recovery behavior is tested with a simulated connection; use the service verifier and opt-in database UI test above to verify your configured hosted service.
 
 ## Deploy on a VM with HTTPS
 

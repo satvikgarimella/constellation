@@ -14,6 +14,7 @@
     "test:browser": "node test/browser.mjs",
     "test:webgpu": "node test/webgpu.mjs",
     "test:scenes": "node test/scenes.mjs",
+    "test:cad": "node test/cad-browser.mjs",
     "test:demo": "node test/demo.mjs",
     "test:controls": "node test/controls.mjs",
     "test:batching": "node test/batching.mjs",
@@ -27,6 +28,7 @@
     "check": "node --check server/index.js && node --check server/coordinator.js && node --check public/app.js && node --check public/render-worker.js"
   },
   "dependencies": {
+    "occt-import-js": "0.0.23",
     "pg": "^8.16.3",
     "qrcode": "^1.5.4",
     "ws": "^8.18.3"

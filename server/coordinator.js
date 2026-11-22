@@ -35,7 +35,7 @@ export class Coordinator {
     if(this.rooms.size >= 100) throw new Error('The studio is at capacity. Please try again later.');
     let id;
     do { id=randomBytes(3).toString('hex').toUpperCase(); } while(this.rooms.has(id));
-    const room={id, hostToken:randomBytes(24).toString('hex'), clients:new Map(), scene:structuredClone(PRESETS.aurora), run:null, sequence:0, leaseSequence:0, history:[], events:[], createdAt:this.now(), touchedAt:this.now()};
+    const room={id, hostToken:randomBytes(24).toString('hex'), clients:new Map(), scene:structuredClone(PRESETS.aurora), sceneRevision:0, run:null, sequence:0, leaseSequence:0, history:[], events:[], createdAt:this.now(), touchedAt:this.now()};
     this.rooms.set(id,room);
     return room;
   }
@@ -46,10 +46,15 @@ export class Coordinator {
     try { this.onEvent(event); } catch { /* Telemetry cannot stop rendering. */ }
     return event;
   }
-  connect(room,socket,{token,label}={}) {
+  setScene(room,scene) {
+    if(room.run?.status==='running')throw new Error('Finish or stop the current render first.');
+    room.scene=validateScene(scene);room.sceneRevision++;room.touchedAt=this.now();this.broadcast(room);
+  }
+  connect(room,socket,{token,label,sceneCache=false}={}) {
     const id=randomBytes(5).toString('hex');
     const client={id,socket,label:String(label||'New device').slice(0,40),host:token===room.hostToken,enabled:false,backend:null,batchSize:1,jobs:new Map(),job:null,tiles:0,pixels:0,durationMs:0,joinedAt:this.now(),color:COLORS[room.clients.size%COLORS.length]};
     room.clients.set(id,client);room.touchedAt=this.now();
+    client.sceneCache=sceneCache===true;client.sentScene=room.scene;client.sentRunId=null;
     json(socket,{type:'welcome',clientId:id,isHost:client.host,state:this.state(room)});
     if(room.run) {
       json(socket,{type:'tile-owners',runId:room.run.id,owners:[...room.run.owners.values()]});
@@ -143,7 +148,8 @@ export class Coordinator {
         run.inflight.set(id,{workerId:c.id,lease:job.lease,assignedAt,expiresAt:assignedAt+this.leaseMs});
       }
       c.job=jobs[0];
-      json(c.socket,{...(c.batchSize>1?{type:'jobs',jobs}:{type:'job',job:c.job}),scene:run.scene,settings:run.settings});
+      json(c.socket,{...(c.batchSize>1?{type:'jobs',jobs}:{type:'job',job:c.job}),scene:!c.sceneCache||c.sentRunId!==run.id?run.scene:undefined,settings:run.settings});
+      c.sentRunId=run.id;
     }
   }
   result(room,client,bytes) {
@@ -201,7 +207,7 @@ export class Coordinator {
     const contributors=run?[...run.contributions.values()]:[];
     const clients=[...room.clients.values()],pixelSamples=run?run.completedPixels*run.settings.samples:0;
     return {
-      roomId:room.id,scene:room.scene,scenePending:!!run&&room.scene!==run.scene,
+      roomId:room.id,scene:room.scene,sceneRevision:room.sceneRevision,scenePending:!!run&&room.scene!==run.scene,
       clients:clients.map(c=>({id:c.id,label:c.label,enabled:c.enabled,backend:c.backend,color:c.color,tiles:c.tiles,pixels:c.pixels,computeMs:c.durationMs,busy:!!c.job,batchSize:c.batchSize,inflight:c.jobs.size,selected:eligible(run,c)})),
       deviceCounts:{connected:clients.length,recruited:clients.filter(c=>c.backend).length,ready:clients.filter(c=>eligible(null,c)).length,eligible:clients.filter(c=>eligible(run,c)).length,contributing:contributors.length},
       run:run?{id:run.id,status:run.status,settings:run.settings,workerIds:run.workerIds,selectionMode:run.workerIds?'selected':'open',initialWorkers:run.initialWorkers,completed:run.results.size,total:run.tiles.length,inflight:run.inflight.size,retries:run.retries,retryReasons:run.retryReasons,lastReassignment:run.lastReassignment,startedAt:run.startedAt,finishedAt:run.finishedAt,completedPixels:run.completedPixels,pixelSamples,pixelSamplesPerSecond:elapsed>0?pixelSamples/elapsed:0,elapsed,tilesPerSecond:elapsed>0?run.results.size/elapsed:0,contributors,fingerprint:run.fingerprint}:null,
@@ -210,5 +216,11 @@ export class Coordinator {
       events:room.events.filter(e=>e.type!=='tile_completed').slice(0,8)
     };
   }
-  broadcast(room) {const state=this.state(room);for(const c of room.clients.values()) json(c.socket,{type:'state',state});}
+  broadcast(room) {
+    const state=this.state(room);
+    for(const c of room.clients.values()) {
+      json(c.socket,{type:'state',state:c.sceneCache&&c.sentScene===room.scene?{...state,scene:undefined}:state});
+      c.sentScene=room.scene;
+    }
+  }
 }

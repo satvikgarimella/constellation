@@ -2,17 +2,21 @@ struct Params {
   origin: vec4<f32>, right: vec4<f32>, up: vec4<f32>, forward: vec4<f32>,
   skyTop: vec4<f32>, skyBottom: vec4<f32>, ground: vec4<f32>, sun: vec4<f32>,
   settings: vec4<f32>, tile: vec4<u32>, misc: vec4<f32>, groundSurface: vec4<f32>,
-  terrainSky: vec4<f32>, auroraColor: vec4<f32>
+  terrainSky: vec4<f32>, auroraColor: vec4<f32>, meshColorMetal: vec4<f32>, meshSurface: vec4<f32>
 }
 // surface.x is roughness; surface.yzw holds emission RGB.
 struct Sphere { centerRadius: vec4<f32>, colorMetal: vec4<f32>, surface: vec4<f32> }
 // Sizes are uploaded as half extents. Each box occupies four aligned vec4s.
 struct Box { center: vec4<f32>, halfSize: vec4<f32>, colorMetal: vec4<f32>, surface: vec4<f32> }
+struct Triangle { a:vec4<f32>, e1:vec4<f32>, e2:vec4<f32> }
+struct MeshNode { lower:vec4<f32>, upper:vec4<f32>, links:vec4<u32> }
 struct Hit { distance: f32, normal: vec3<f32>, color: vec3<f32>, metal: f32, roughness: f32, emission: vec3<f32>, found: bool }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var<storage,read> spheres: array<Sphere>;
 @group(0) @binding(2) var<storage,read_write> pixels: array<u32>;
 @group(0) @binding(3) var<storage,read> boxes: array<Box>;
+@group(0) @binding(4) var<storage,read> triangles: array<Triangle>;
+@group(0) @binding(5) var<storage,read> meshNodes: array<MeshNode>;
 var<private> seed: u32;
 fn rand() -> f32 {
   seed=seed^(seed<<13u); seed=seed^(seed>>17u); seed=seed^(seed<<5u);
@@ -24,6 +28,42 @@ fn randomUnit() -> vec3<f32> {
 }
 fn emptyHit() -> Hit {
   return Hit(1e10,vec3<f32>(0.0),vec3<f32>(0.0),0.0,0.5,vec3<f32>(0.0),false);
+}
+fn hitMeshBounds(origin:vec3<f32>,direction:vec3<f32>,node:MeshNode,maxDistance:f32) -> bool {
+  var near=0.002;var far=maxDistance;
+  for(var axis=0u;axis<3u;axis++) {
+    if(abs(direction[axis])<0.00000001) {
+      if(origin[axis]<node.lower[axis] || origin[axis]>node.upper[axis]) {return false;}
+      continue;
+    }
+    let a=(node.lower[axis]-origin[axis])/direction[axis];let b=(node.upper[axis]-origin[axis])/direction[axis];
+    near=max(near,min(a,b));far=min(far,max(a,b));if(far<near){return false;}
+  }
+  return true;
+}
+fn intersectMesh(origin:vec3<f32>,direction:vec3<f32>,maxDistance:f32) -> Hit {
+  var h=emptyHit();h.distance=maxDistance;var index=0u;
+  // Escape indices skip whole branches without a per-ray stack.
+  while(index<u32(p.misc.w)) {
+    let node=meshNodes[index];
+    if(!hitMeshBounds(origin,direction,node,h.distance)){index=node.links.z;continue;}
+    if(node.links.y==0u){index++;continue;}
+    for(var i=node.links.x;i<node.links.x+node.links.y;i++) {
+      let t=triangles[i];let determinantVector=cross(direction,t.e2.xyz);let det=dot(t.e1.xyz,determinantVector);
+      if(abs(det)<0.00000001){continue;}
+      let inv=1.0/det;let s=origin-t.a.xyz;let u=dot(s,determinantVector)*inv;
+      if(u<0.0 || u>1.0){continue;}
+      let q=cross(s,t.e1.xyz);let v=dot(direction,q)*inv;
+      if(v<0.0 || u+v>1.0){continue;}
+      let distance=dot(t.e2.xyz,q)*inv;
+      if(distance<=0.002 || distance>=h.distance){continue;}
+      var normal=normalize(cross(t.e1.xyz,t.e2.xyz));
+      if(dot(normal,direction)>0.0){normal=-normal;}
+      h=Hit(distance,normal,p.meshColorMetal.xyz,p.meshColorMetal.w,p.meshSurface.x,p.meshSurface.yzw,true);
+    }
+    index=node.links.z;
+  }
+  return h;
 }
 fn intersectBox(origin:vec3<f32>,direction:vec3<f32>,b:Box) -> Hit {
   var near=-1e10;var far=1e10;
@@ -147,6 +187,10 @@ fn intersect(origin:vec3<f32>,direction:vec3<f32>) -> Hit {
   for(var i=0u;i<u32(p.groundSurface.w);i++) {
     let boxHit=intersectBox(origin,direction,boxes[i]);
     if(boxHit.found && boxHit.distance<h.distance) {h=boxHit;}
+  }
+  if(p.misc.w>0.0) {
+    let meshHit=intersectMesh(origin,direction,h.distance);
+    if(meshHit.found && meshHit.distance<h.distance){h=meshHit;}
   }
   if(p.terrainSky.x>0.0) {
     let terrainHit=intersectTerrain(origin,direction,h.distance);

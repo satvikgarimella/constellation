@@ -1,3 +1,5 @@
+import { validateMesh } from './mesh.js';
+
 export const TILE_SIZE = 32;
 export const MAX_SPHERES = 64;
 export const MAX_BOXES = 48;
@@ -106,9 +108,10 @@ export function validateScene(input) {
   if (!input || !Array.isArray(input.spheres) || input.spheres.length > MAX_SPHERES) throw new Error(`A scene supports up to ${MAX_SPHERES} spheres.`);
   if (input.boxes !== undefined && (!Array.isArray(input.boxes) || input.boxes.length > MAX_BOXES)) throw new Error(`A scene supports up to ${MAX_BOXES} boxes.`);
   const boxes = input.boxes || [];
+  const mesh = validateMesh(input.mesh);
   if (input.spheres.length + boxes.length > 64) throw new Error('A scene supports up to 64 objects in total.');
   const terrain = {height:finite(input.terrain?.height,0,0,3),scale:finite(input.terrain?.scale,0.4,0.08,1)};
-  if (!input.spheres.length && !boxes.length && !terrain.height) throw new Error('A scene needs spheres, boxes, or terrain.');
+  if (!input.spheres.length && !boxes.length && !terrain.height && !mesh) throw new Error('A scene needs an imported model, spheres, boxes, or terrain.');
   const camera = vec(input.camera, base.camera, -60, 60);
   const target = vec(input.target, base.target, -40, 40);
   if (Math.hypot(...camera.map((v, i) => v - target[i])) < 0.1 || Math.hypot(camera[0] - target[0], camera[2] - target[2]) < 0.1) throw new Error('Camera must look toward the scene from an angle.');
@@ -127,6 +130,7 @@ export function validateScene(input) {
       center[1] = Math.max(center[1], radius - 0.85);
       return { center, radius, color: vec(s.color, [0.6, 0.6, 0.6], 0.01, 1), metal: finite(s.metal, 0, 0, 1), roughness: finite(s.roughness, 0.1, 0, 1),emission:vec(s.emission,[0,0,0],0,8) };
     }),
+    ...(mesh ? {mesh} : {}),
     boxes: boxes.map(b => {
       if (!b || typeof b !== 'object') throw new Error('Every box must describe a material, position, and size.');
       const size=vec(b.size,[1,1,1],0.1,20),center=vec(b.center,[0,0,0],-40,40);
@@ -134,6 +138,17 @@ export function validateScene(input) {
       return {center,size,color:vec(b.color,[0.4,0.5,0.7],0.01,1),metal:finite(b.metal,0,0,1),roughness:finite(b.roughness,0.3,0,1),emission:vec(b.emission,[0,0,0],0,8)};
     })
   };
+}
+
+export function sceneForMesh(mesh) {
+  const validated=validateMesh(mesh);
+  if(!validated)throw new Error('Choose a model to import.');
+  let lower=Infinity,upper=-Infinity;
+  for(let i=1;i<validated.triangles.length;i+=3){lower=Math.min(lower,validated.triangles[i]);upper=Math.max(upper,validated.triangles[i]);}
+  const middle=(lower+upper)/2;
+  return validateScene({...PRESETS.solstice,name:validated.name,description:'Your uploaded model, lit and rendered by the connected devices.',
+    spheres:[],boxes:[],mesh:validated,camera:[6,middle+3.5,7],target:[0,middle,0],fov:40,
+    ground:[0.22,0.25,0.29],groundMetal:0.2,groundRoughness:0.35,terrain:{height:0,scale:0.4},aurora:{strength:0,color:[0.08,1,0.48]},stars:0});
 }
 
 export function createTiles(width, height, tileSize = TILE_SIZE) {

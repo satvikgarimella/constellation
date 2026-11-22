@@ -5,8 +5,8 @@ import { mkdtemp,readFile,rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateScene } from '../server/gemini.js';
-import { PRESETS, MAX_SPHERES, MAX_BOXES } from '../public/scene.js';
+import { generateScene, applySceneEdit } from '../server/gemini.js';
+import { PRESETS, MAX_SPHERES, MAX_BOXES, validateScene } from '../public/scene.js';
 
 const sceneResponse=scene=>Response.json({candidates:[{content:{parts:[{text:JSON.stringify(scene)}]}}]});
 
@@ -108,4 +108,88 @@ test('service verifier fails truthfully without credentials and saves a sanitize
   assert.equal(onlyGemini.status,1);assert.deepEqual(Object.keys(JSON.parse(onlyGemini.stdout).services),['gemini']);
   const invalid=spawnSync(process.execPath,[script,'--unknown'],{cwd:directory,env:{},encoding:'utf8',timeout:10000});
   assert.equal(invalid.status,2);assert.match(invalid.stderr,/Service verification could not complete/);
+});
+
+test('editing keeps all existing geometry and sends current scene context',async()=>{
+  let request;
+  const current=validateScene(PRESETS.orbit),before=structuredClone(current);
+  const patch={changes:{skyTop:[0.4,0.12,0.08],skyBottom:[0.9,0.45,0.2],sun:[1,0.6,0.3],exposure:1.4,camera:[4,3,6]},materials:[]};
+  const edited=await generateScene({prompt:'Keep the sculpture, make it sunset, and move closer',currentScene:current,mode:'edit',apiKey:'test-key',fetchImpl:async(_url,options)=>{
+    request=JSON.parse(options.body);return sceneResponse(patch);
+  }});
+  assert.ok(current.spheres.length>24,'Existing presets can exceed the new-generation limit');
+  assert.deepEqual(edited.spheres,current.spheres);assert.deepEqual(edited.boxes,current.boxes);assert.deepEqual(edited.terrain,current.terrain);
+  assert.deepEqual(edited.camera,patch.changes.camera);assert.deepEqual(edited.skyTop,patch.changes.skyTop);
+  assert.deepEqual(current,before,'Editing must not mutate the original scene');
+  const context=JSON.parse(request.contents[0].parts[0].text);
+  assert.equal(context.currentScene.spheres.length,current.spheres.length);
+  assert.match(request.systemInstruction.parts[0].text,/geometry is locked/);
+  const schema=request.generationConfig.responseJsonSchema;
+  assert.deepEqual(schema.required,['changes','materials']);
+  assert.equal(schema.properties.changes.properties.spheres,undefined);
+  assert.doesNotMatch(JSON.stringify(schema),/"(?:minItems|maxItems|minimum|maximum)"/);
+});
+
+test('material edits preserve every box position and dimension in a large city',()=>{
+  const current=validateScene(PRESETS.city);
+  const edited=applySceneEdit(current,{changes:{name:'Sunset city'},materials:[{kind:'box',index:3,color:[0.9,0.6,0.2],roughness:0.6}]});
+  assert.ok(current.boxes.length>32);
+  assert.equal(edited.boxes.length,current.boxes.length);
+  for(let i=0;i<current.boxes.length;i++) {
+    assert.deepEqual(edited.boxes[i].center,current.boxes[i].center);
+    assert.deepEqual(edited.boxes[i].size,current.boxes[i].size);
+    if(i!==3)assert.deepEqual(edited.boxes[i],current.boxes[i]);
+  }
+  assert.deepEqual(edited.boxes[3].color,[0.9,0.6,0.2]);assert.equal(edited.boxes[3].roughness,0.6);
+});
+
+test('unsupported, malformed, prototype, and out-of-range edit patches are rejected',()=>{
+  const current=validateScene(PRESETS.city),original=structuredClone(current);
+  const invalid=[
+    {changes:{spheres:[]},materials:[]},
+    {changes:{terrain:{height:3}},materials:[]},
+    {changes:{camera:[0,0]},materials:[]},
+    {changes:{camera:[Infinity,0,1]},materials:[]},
+    {changes:{camera:[0,0,0],target:[0,0,0]},materials:[]},
+    {changes:{camera:[80,2,3]},materials:[]},
+    {changes:{exposure:100},materials:[]},
+    {changes:{aurora:{strength:1,untrusted:1}},materials:[]},
+    {changes:{name:''},materials:[]},
+    {changes:{},materials:[{kind:'box',index:0,center:[0,2,0]}]},
+    {changes:{},materials:[{kind:'box',index:0}]},
+    {changes:{},materials:[{kind:'box',index:-1,color:[1,1,1]}]},
+    {changes:{},materials:[{kind:'box',index:99,color:[1,1,1]}]},
+    {changes:{},materials:[{kind:'box',index:0,color:[0,0,0]}]},
+    {changes:{},materials:[{kind:'box',index:0,color:[1,1,1]},{kind:'box',index:0,metal:1}]},
+    {changes:{},materials:[{kind:'mesh',index:0,metal:1}]},
+    {changes:{},materials:[],unexpected:true},
+    JSON.parse('{"changes":{"__proto__":{"polluted":true}},"materials":[]}'),
+    JSON.parse('{"changes":{},"materials":[{"kind":"box","index":0,"constructor":{}}]}'),
+    {changes:Object.create({exposure:2}),materials:[]}
+  ];
+  for(const patch of invalid)assert.throws(()=>applySceneEdit(current,patch),error=>error.code==='GEMINI_INVALID_EDIT');
+  assert.deepEqual(current,original);assert.equal({}.polluted,undefined);
+});
+
+test('edit preflight rejects missing scene and invalid mode before contacting Gemini',async()=>{
+  const fetchImpl=async()=>{throw new Error('The upstream must not be called');};
+  await assert.rejects(()=>generateScene({prompt:'sunset',mode:'edit',apiKey:'test-key',fetchImpl}),error=>error.code==='GEMINI_INVALID_EDIT');
+  await assert.rejects(()=>generateScene({prompt:'sunset',mode:'unknown',apiKey:'test-key',fetchImpl}),error=>error.code==='GEMINI_INVALID_MODE');
+});
+
+test('mesh editing keeps uploaded vertices private and preserves them while changing material',async()=>{
+  const current=validateScene({...PRESETS.solstice,spheres:[],boxes:[],mesh:{name:'Uploaded design',triangles:[0,0,0,2,0,0,0,2,0],color:[0.6,0.7,0.8],metal:0.35,roughness:0.25,emission:[0,0,0]}});
+  const before=structuredClone(current);
+  let context;
+  const edited=await generateScene({prompt:'Make my model copper and move the camera closer',currentScene:current,mode:'edit',apiKey:'test-key',fetchImpl:async(_url,options)=>{
+    const request=JSON.parse(options.body);context=JSON.parse(request.contents[0].parts[0].text).currentScene;
+    assert.equal(JSON.stringify(request).includes('"triangles"'),false);
+    return sceneResponse({changes:{camera:[4,2,5]},materials:[{kind:'mesh',index:0,color:[0.8,0.4,0.2],metal:0.95}]});
+  }});
+  assert.equal(context.mesh.triangleCount,1);assert.equal(context.mesh.name,'Uploaded design');
+  assert.equal(Object.hasOwn(context.mesh,'triangles'),false);assert.equal(Object.hasOwn(context.mesh,'material'),false);
+  assert.deepEqual(edited.mesh.triangles,current.mesh.triangles);assert.deepEqual(edited.mesh.color,[0.8,0.4,0.2]);assert.equal(edited.mesh.metal,0.95);
+  assert.deepEqual(edited.mesh.roughness,current.mesh.roughness);assert.deepEqual(current,before);
+  assert.throws(()=>applySceneEdit(current,{changes:{},materials:[{kind:'mesh',index:0,triangles:[0,0,0]}]}),error=>error.code==='GEMINI_INVALID_EDIT');
+  assert.throws(()=>applySceneEdit(current,{changes:{},materials:[{kind:'mesh',index:1,metal:0.5}]}),error=>error.code==='GEMINI_INVALID_EDIT');
 });

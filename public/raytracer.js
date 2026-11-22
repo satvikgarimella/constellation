@@ -1,4 +1,5 @@
 import { intersectBox, intersectTerrain, environmentRadiance } from './procedural.js';
+import { prepareMesh, intersectMesh } from './mesh.js';
 
 const add = (a,b) => [a[0]+b[0],a[1]+b[1],a[2]+b[2]];
 const sub = (a,b) => [a[0]-b[0],a[1]-b[1],a[2]-b[2]];
@@ -14,7 +15,7 @@ export function cameraBasis(scene) {
   return { forward, right, up: cross(right,forward) };
 }
 
-function hitScene(origin, direction, scene, maxDistance = 1e10) {
+function hitScene(origin, direction, scene, maxDistance = 1e10, geometry = null) {
   let distance = maxDistance, material = null, normal;
   if (!(scene.terrain?.height>0) && Math.abs(direction[1]) > 1e-6) {
     const t = (-0.85-origin[1])/direction[1];
@@ -35,6 +36,10 @@ function hitScene(origin, direction, scene, maxDistance = 1e10) {
     const hit=intersectBox(origin,direction,box,distance);
     if(hit) {distance=hit.distance;material=box;normal=hit.normal;}
   }
+  if(geometry) {
+    const hit=intersectMesh(origin,direction,geometry,distance);
+    if(hit){distance=hit.distance;normal=hit.normal;material=scene.mesh;}
+  }
   if(scene.terrain?.height>0) {
     const hit=intersectTerrain(origin,direction,scene.terrain,distance);
     if(hit&&hit.distance<distance) {
@@ -46,6 +51,7 @@ function hitScene(origin, direction, scene, maxDistance = 1e10) {
 }
 
 export function renderTileCPU(scene, settings, tile) {
+  const geometry=prepareMesh(scene.mesh);
   const pixels = new Uint8ClampedArray(tile.width*tile.height*4);
   const {forward,right,up}=cameraBasis(scene);
   const scale=Math.tan(scene.fov*Math.PI/360),aspect=settings.width/settings.height;
@@ -63,7 +69,7 @@ export function renderTileCPU(scene, settings, tile) {
       let direction=norm(add(forward,add(mul(right,u),mul(up,v)))),origin=scene.camera;
       const throughput=[1,1,1];
       for(let bounce=0;bounce<settings.bounces;bounce++) {
-        const hit=hitScene(origin,direction,scene);
+        const hit=hitScene(origin,direction,scene,1e10,geometry);
         if(!hit) {
           const environment=environmentRadiance(direction,scene);
           for(let c=0;c<3;c++) sum[c]+=throughput[c]*environment[c];
@@ -76,7 +82,7 @@ export function renderTileCPU(scene, settings, tile) {
         origin=add(add(origin,mul(direction,hit.distance)),mul(n,0.003));
         const light=norm(add(sunDirection,mul(unit(),0.075)));
         const cosine=Math.max(0,dot(n,light));
-        if(cosine>0 && !hitScene(origin,light,scene)) for(let c=0;c<3;c++) sum[c]+=throughput[c]*mat.color[c]*(1-mat.metal)*scene.sun[c]*cosine*1.6;
+        if(cosine>0 && !hitScene(origin,light,scene,1e10,geometry)) for(let c=0;c<3;c++) sum[c]+=throughput[c]*mat.color[c]*(1-mat.metal)*scene.sun[c]*cosine*1.6;
         if(random()<mat.metal) direction=norm(add(reflect(direction,n),mul(unit(),mat.roughness)));
         else direction=norm(add(n,unit()));
         if(dot(direction,n)<=0) break;

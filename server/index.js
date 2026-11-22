@@ -8,17 +8,20 @@ import QRCode from 'qrcode';
 import { Coordinator } from './coordinator.js';
 import { Telemetry } from './telemetry.js';
 import { generateScene } from './gemini.js';
+import { validateScene } from '../public/scene.js';
 
 const ROOT=fileURLToPath(new URL('../public/',import.meta.url));
-const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.wgsl':'text/plain; charset=utf-8'};
+const CAD_ROOT=fileURLToPath(new URL('../node_modules/occt-import-js/dist/',import.meta.url));
+const CAD_FILES=new Set(['occt-import-js.js','occt-import-js.wasm','license.occt-import-js.txt','license.occt.txt']);
+const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.wgsl':'text/plain; charset=utf-8','.obj':'text/plain; charset=utf-8','.stl':'application/octet-stream','.step':'text/plain; charset=utf-8','.stp':'text/plain; charset=utf-8','.wasm':'application/wasm','.txt':'text/plain; charset=utf-8'};
 
-export function createApp({port=Number(process.env.PORT)||3210,host=process.env.HOST||'0.0.0.0',dataDir=process.env.DATA_DIR||'./data',databaseUrl=process.env.DATABASE_URL,apiKey=process.env.GEMINI_API_KEY,publicUrl=process.env.PUBLIC_URL||'',leaseMs=30000}={}) {
+export function createApp({port=Number(process.env.PORT)||3210,host=process.env.HOST||'0.0.0.0',dataDir=process.env.DATA_DIR||'./data',databaseUrl=process.env.DATABASE_URL,apiKey=process.env.GEMINI_API_KEY,publicUrl=process.env.PUBLIC_URL||'',leaseMs=30000,sceneGenerator=generateScene}={}) {
   const telemetry=new Telemetry({directory:dataDir,databaseUrl});
   const coordinator=new Coordinator({onEvent:e=>telemetry.record(e),leaseMs});
   const creationLimits=new Map(),aiLimits=new Map();
   let listeningPort=port;
   const send=(res,status,body)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(body));};
-  const body=async req=>{let text='';for await(const chunk of req) {text+=chunk;if(text.length>16000) throw new Error('Request too large.');}return JSON.parse(text||'{}');};
+  const body=async (req,limit=16000)=>{let size=0;const chunks=[];for await(const chunk of req) {size+=chunk.length;if(size>limit) throw new Error('Request too large.');chunks.push(chunk);}return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');};
   const allowedOrigin=req=>!req.headers.origin||req.headers.origin===`http://${req.headers.host}`||req.headers.origin===`https://${req.headers.host}`||(publicUrl&&req.headers.origin===new URL(publicUrl).origin);
   const authorize=(req,room)=>room&&req.headers.authorization===`Bearer ${room.hostToken}`;
   const server=http.createServer(async(req,res)=>{
@@ -27,6 +30,9 @@ export function createApp({port=Number(process.env.PORT)||3210,host=process.env.
     try {
       if(!allowedOrigin(req)) return send(res,403,{error:'Origin not allowed.'});
       const url=new URL(req.url,'http://localhost');
+      // Pinned OCCT Embind glue uses generated functions. Permit them only in
+      // the disposable CAD worker; the studio and render workers keep strict CSP.
+      if(url.pathname==='/cad-worker.js')res.setHeader('Content-Security-Policy',"default-src 'none'; script-src 'self' 'unsafe-eval'; connect-src 'self'; worker-src 'none'");
       if(url.pathname==='/healthz') return send(res,200,{ok:true});
       if(url.pathname==='/api/config') {
         const addresses=Object.values(networkInterfaces()).flat().filter(n=>n&&n.family==='IPv4'&&!n.internal).map(n=>`http://${n.address}:${listeningPort}`);
@@ -44,15 +50,24 @@ export function createApp({port=Number(process.env.PORT)||3210,host=process.env.
         const room=coordinator.get(apiRoom[1]);if(!room) return send(res,404,{error:'This room has expired or does not exist.'});
         if(!apiRoom[2]&&req.method==='GET') return send(res,200,coordinator.state(room));
         if(apiRoom[2]==='metrics'&&req.method==='GET') return send(res,200,await telemetry.metrics(room.id));
-        if(apiRoom[2]==='scene'&&req.method==='POST') {
-          if(!authorize(req,room)) return send(res,403,{error:'Only the room owner can generate a scene.'});
+        if(apiRoom[2]==='scene'&&['POST','PUT'].includes(req.method)) {
+          if(!authorize(req,room)) return send(res,403,{error:'Only the room owner can change the scene.'});
           if(room.run?.status==='running') return send(res,409,{error:'Finish or stop the current render first.'});
+          const input=await body(req,2*1024*1024);
+          if(input.revision!==undefined&&input.revision!==room.sceneRevision) return send(res,409,{error:'The scene changed. Refresh your studio before trying again.'});
+          if(req.method==='PUT') {
+            const scene=validateScene(input.scene);
+            coordinator.setScene(room,scene);
+            return send(res,200,{scene,revision:room.sceneRevision});
+          }
+          if(input.mode!==undefined&&!['generate','edit'].includes(input.mode)) return send(res,400,{error:'Choose Generate new or Edit scene.'});
           const last=aiLimits.get(room.id)||0;if(Date.now()-last<5000) return send(res,429,{error:'Please wait a few seconds before generating again.'});
-          const input=await body(req);if(typeof input.prompt!=='string'||input.prompt.length<3||input.prompt.length>600) return send(res,400,{error:'Describe your scene in 3–600 characters.'});
+          if(typeof input.prompt!=='string'||input.prompt.trim().length<3||input.prompt.length>600) return send(res,400,{error:'Describe your scene in 3–600 characters.'});
+          const revision=room.sceneRevision,sequence=room.sequence;
           aiLimits.set(room.id,Date.now());
-          const scene=await generateScene({prompt:input.prompt,scene:room.scene,apiKey});
-          if(room.run?.status==='running') return send(res,409,{error:'A render started while the scene was being generated. Finish or stop it, then try again.'});
-          room.scene=scene;coordinator.broadcast(room);return send(res,200,{scene});
+          const scene=await sceneGenerator({prompt:input.prompt,currentScene:room.scene,mode:input.mode||'generate',apiKey});
+          if(room.run?.status==='running'||sequence!==room.sequence||revision!==room.sceneRevision) return send(res,409,{error:'The scene or render changed while Gemini was working. Your current scene is preserved; try again.'});
+          coordinator.setScene(room,scene);return send(res,200,{scene,revision:room.sceneRevision});
         }
         return send(res,405,{error:'Method not allowed.'});
       }
@@ -64,6 +79,13 @@ export function createApp({port=Number(process.env.PORT)||3210,host=process.env.
         res.writeHead(200,{'Content-Type':'image/svg+xml','Cache-Control':'no-store'});return res.end(svg);
       }
       if(req.method!=='GET'&&req.method!=='HEAD') return send(res,405,{error:'Method not allowed.'});
+      if(url.pathname.startsWith('/vendor/occt/')) {
+        const name=url.pathname.slice('/vendor/occt/'.length);
+        if(!CAD_FILES.has(name))return send(res,404,{error:'Not found.'});
+        const contents=await readFile(resolve(CAD_ROOT,name));
+        res.writeHead(200,{'Content-Type':MIME[extname(name)],'Cache-Control':'public, max-age=86400'});
+        return res.end(req.method==='HEAD'?undefined:contents);
+      }
       let path=url.pathname;
       if(path==='/'||/^\/(r|join)\/[A-F0-9]{6}$/i.test(path)) path='/index.html';
       const file=resolve(ROOT,'.'+decodeURIComponent(path));

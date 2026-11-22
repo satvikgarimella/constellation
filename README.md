@@ -2,13 +2,22 @@
 
 **Turn a room of browsers into a shared render farm.** Participants scan a QR code, opt in, and calculate separate tiles of a path-traced image. The studio assembles their pixels live, shows each device's contribution, and reassigns unfinished work when someone leaves.
 
-This is a working hackathon prototype for collaborative rendering and teaching distributed systems. Its scene format supports spheres, boxes, dune terrain, and procedural skies. It is not a Blender renderer or a general-purpose distributed GPU.
+This is a working hackathon prototype for collaborative rendering and teaching distributed systems. Its scene format supports spheres, boxes, dune terrain, procedural skies, and bounded triangle meshes imported from STL, triangulated OBJ, or STEP. It is not a Blender renderer or a general-purpose distributed GPU.
 
 ## Hosted demo
 
 Open **[constellation-render.onrender.com](https://constellation-render.onrender.com)** on your laptop to create a host room. Select **Invite devices**, have contributors scan the QR and opt in, then choose a preset and **Start render**. The coordinator runs on Render independently of your laptop; keep the host tab open to control that room.
 
 The service uses Render Free in a Hobby workspace. An idle service can take about a minute to wake, and restarts clear rooms. Start with a small room and modest resolution because image traffic counts against the free bandwidth allowance. Gemini generation and database analytics require their server-side credentials. See the [Render deployment guide](deploy/RENDER.md) for configuration, limits, and verification.
+
+## Edit, import, and measure
+
+- **Edit current scene:** describe a change such as “make it sunset” or “move the camera closer.” Gemini edits camera, lighting, and materials while preserving all geometry. **Generate new scene** starts a fresh primitive-based scene. **Undo / Redo** retain up to 20 accepted versions in the current tab; a refresh resets that local history. Failed AI edits or file imports leave the current scene intact.
+- **Your 3D model:** import ASCII/binary **STL**, triangulated **OBJ**, or **STEP / STP**. **Try a sample chair** loads original 120-triangle sample geometry. Imports are limited to 10 MB and 10,000 triangles, centered/scaled to the scene, and rendered with one material and flat face normals. Textures, animation, and native SolidWorks `.sldprt` files are unsupported. Export native CAD projects to STEP or STL. The importer assumes Y-up.
+- **STEP:** a disposable browser worker loads OpenCascade WebAssembly only when needed, converts surfaces into triangles, and stops after 30 seconds. It rejects files exceeding the mesh limit; simplify complex CAD or export a lower-detail STL. No CAD application or server-side converter is required. Model geometry is shared with the room's contributors for rendering; Gemini edit requests receive mesh metadata/materials, never its vertex array. See [third-party notices](THIRD_PARTY.md).
+- **Run scaling benchmark:** choose **Solo device**, scene, and quality, then start the repeated test. It freezes up to eight matching-backend contributors into nested groups of 1, 2, 4, and the full selected group (duplicates omitted). Each group warms up once, followed by three measured trials with rotated ordering. The graph shows median time and fastest/slowest runs; the table reports speedup even when it is below 1×. **Export results** saves every trial and device contribution. A lost/paused participant, changed renderer/workload, or recovered tile cancels the test and marks partial results incomplete.
+
+Use separate physical devices to establish real crowd speedup. The selected baseline participates in every larger group. Timings include scheduling, network transfer, and rendering; tiny workloads can be slower with more devices. Benchmarks stop at eight contributors even though ordinary rooms support more sessions. Choose a modest workload first; repeated high-resolution runs consume more bandwidth.
 
 ## Run locally
 
@@ -149,13 +158,30 @@ Phone / laptop ◄── tile + scene + lease ────┤
                                           └──► JSONL / optional Postgres
 ```
 
-`public/scene.js` defines scene validation, deterministic per-pixel seeding, tiles, and the result protocol. `public/raytracer.js` and `public/trace.wgsl` implement the same rendering algorithm. `public/render-worker.js` chooses the backend. `server/coordinator.js` owns all scheduling; the server never calculates the rendered pixels.
+`public/scene.js` defines scene validation, deterministic per-pixel seeding, tiles, and the result protocol. `public/raytracer.js` and `public/trace.wgsl` implement the same rendering algorithm. Imported triangle meshes use a shared stackless bounding-volume hierarchy from `public/mesh.js`, cached for each render run. `public/render-worker.js` chooses the backend. `server/coordinator.js` owns all scheduling; the server never calculates the rendered pixels.
 
-Each browser opts into batches of up to four tiles, sharing the scene once per batch to reduce network round trips. It renders those tiles sequentially and returns each result immediately. A drained batch gets more work, so faster workers naturally receive more. Older clients keep single-tile behavior; append `?batch=1` to a joining browser URL to measure that mode. Jobs have a worker identity, run ID, and unique lease. A pause, disconnect, or 30-second period without accepted progress releases every unfinished tile in the batch. Stale, duplicate, malformed, or wrong-worker result frames are rejected. Late viewers receive the cached image and contribution map.
+Each browser opts into batches of up to four tiles. Current clients cache the scene: it is sent with the first job batch per run and only when changed in periodic state updates. Older clients receive the complete scene per batch for compatibility. Hosts upload scene changes over a bounded, authenticated HTTP request; WebSocket start messages reference the already accepted scene rather than resending mesh geometry. It renders those tiles sequentially and returns each result immediately. A drained batch gets more work, so faster workers naturally receive more. Older clients keep single-tile behavior; append `?batch=1` to a joining browser URL to measure that mode. Jobs have a worker identity, run ID, and unique lease. A pause, disconnect, or 30-second period without accepted progress releases every unfinished tile in the batch. Stale, duplicate, malformed, or wrong-worker result frames are rejected. Late viewers receive the cached image and contribution map.
 
 The host capability token stays in the creating tab's session storage and is not included in URLs or invitations. The server verifies it for every connection. Reloading that tab or navigating between `/r/ROOM_CODE` and `/join/ROOM_CODE` on the same site preserves its host access. The contributor page shows **Open host controls** only after the server recognizes that host; other participants see **Watch the full studio**. A studio URL alone provides viewing and contributing access, so keep the original host tab for the demo.
 
 ## Tests
+
+New feature checks:
+
+```sh
+# Pure/unit and isolated server tests, including edits, meshes, scene caching, and scaling.
+node --test test/*.test.js
+# Actual WebGPU mesh shader versus CPU reference.
+node test/mesh-webgpu.mjs
+# Complete UI: edit/Undo, uploads, distributed mesh rendering, repeated graph/export.
+# Gemini is simulated in this local UI check; it makes no provider requests.
+node test/upgrades.mjs
+# Actual STEP conversion in an isolated browser worker, input errors, and timeout.
+node test/cad-browser.mjs
+```
+
+The optional browser checks need the same Playwright module and GPU settings shown below. Their multiple browser contexts share a Mac; they do not establish physical-device speedup.
+
 
 ```sh
 node --test test/*.test.js
